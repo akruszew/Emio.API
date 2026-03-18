@@ -117,7 +117,7 @@ class DepthCamera:
         self.show_video_feed = show_video_feed
         self.compute_point_cloud = compute_point_cloud
         self.configuration = configuration
-
+        self._camera_serial = camera_serial
         self.initialized = True
 
         if not self.initialized:
@@ -216,8 +216,8 @@ class DepthCamera:
         self.rsconfig = rs.config()
         self.pc = rs.pointcloud()
 
-        if  self.camera_serial is not None:
-            self.rsconfig.enable_device(self.camera_serial)
+        if  self._camera_serial is not None:
+            self.rsconfig.enable_device(self._camera_serial)
 
         # Get device product line for setting a supporting resolution
         self.pipeline_wrapper = rs.pipeline_wrapper(self.pipeline)
