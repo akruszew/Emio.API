@@ -414,6 +414,7 @@ class EmioCamera:
 
             if camera_serial is not None:
                 self.camera_serial = camera_serial
+                self._camera._camera_serial = camera_serial
 
             logger.debug("Starting camera with show: {}, tracking: {}, compute_point_cloud: {}".format(self._show, self._tracking, self._compute_point_cloud))
             self._camera.open()
