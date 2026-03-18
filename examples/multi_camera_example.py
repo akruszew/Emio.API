@@ -20,17 +20,9 @@ def main(emio: EmioCamera,emio2: EmioCamera):
             emio2.update() # update the camera frame and trackers
 
             print("-"*20)
-            # logger.info(f"Camera parameters: {emio.parameters}")
-            # logger.info(f"Camera show: {emio.show_frames}")
-            # logger.info(f"Camera tracking: {emio.track_markers}")
-            # logger.info(f"Camera compute point cloud: {emio.compute_point_cloud}")
-            # logger.info(f"Camera is running: {emio.is_running}")
             logger.info(f"Count tracker: {len(emio.trackers_pos)},{len(emio2.trackers_pos)}")
             logger.info(f"Trackers positions: {emio.trackers_pos},{emio2.trackers_pos}")
-            # logger.info(f"Point cloud shape: {emio.point_cloud.shape}")
-            # logger.info(f"HSV Frame shape: {emio.hsv_frame.shape}")
-            # logger.info(f"Mask Frame shape: {emio.mask_frame.shape}")
-
+            
         except KeyboardInterrupt:
             logger.info("Keyboard interrupt received.")
             break
@@ -60,10 +52,10 @@ if __name__ == "__main__":
         cameras = emio.listCameras()
 
 
-        if emio.open(cameras[0]): # This will open the first available Realsense camera
+        if emio.open(cameras[1]): # This will open the first available Realsense camera
             logger.info(f"Emio camera {emio.camera_serial} opened.")
             logger.info("Running main function...")
-            emio2.open(cameras[1])
+            emio2.open(cameras[0])
             logger.info(f"Emio camera {emio2.camera_serial} opened.")
             logger.info("Running main function...")
             
