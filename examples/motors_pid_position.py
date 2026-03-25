@@ -1,7 +1,11 @@
 import numpy as np
+import matplotlib
+matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import time
-
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.realpath(__file__))+'/..')
 from emioapi import EmioMotors
 
 
@@ -15,8 +19,8 @@ def main():
     print("Motors opened successfully.")
 
     # initial and target angles
-    init_angles = np.array([0.5, 0, 0.5, 0])
-    target_angles = init_angles + np.array([0.4, 0, 0, 0])
+    init_angles = np.array([0.0, 0, 0.0, 0])
+    target_angles = init_angles + np.array([0.1, 0, 0, 0])
     motors.angles = init_angles
     time.sleep(1)
 
@@ -42,7 +46,6 @@ def main():
     while time.time() - t0 < 0.3:
         measures.append(motors.angles)
         times.append(time.time())
-        time.sleep(0.01)
     time.sleep(1)
     nb_steps1 = len(measures)
 
@@ -51,7 +54,7 @@ def main():
 
     motors.position_p_gain = [15800, 800, 15800, 800]
     motors.position_i_gain = [0, 0, 0, 0]
-    motors.position_d_gain = [600, 0, 600, 0]
+    motors.position_d_gain = [0, 0, 0, 0]
     print("Set second PID gains.")
     time.sleep(1)
 
@@ -70,7 +73,6 @@ def main():
     while time.time() - t0 < 0.3:
         measures.append(motors.angles)
         times.append(time.time())
-        time.sleep(0.01)
     time.sleep(1)
 
     motors.close()

@@ -145,6 +145,9 @@ class MotorGroup:
         self.groupWriters["goal_velocity"] = GroupSyncWrite(self.portHandler, self.packetHandler,
                                                             self.parameters.ADDR_GOAL_VELOCITY,
                                                             self.parameters.LEN_GOAL_POSITION)
+        self.groupWriters["goal_pwm"] = GroupSyncWrite(self.portHandler, self.packetHandler,
+                                                            self.parameters.ADDR_GOAL_PWM,
+                                                            self.parameters.LEN_GOAL_PWM)
         self.groupWriters["velocity_profile"] = GroupSyncWrite(self.portHandler, self.packetHandler,
                                                                 self.parameters.ADDR_VELOCITY_PROFILE,
                                                                 self.parameters.LEN_GOAL_POSITION)
@@ -221,9 +224,9 @@ class MotorGroup:
 
         Raises:
             Exception: If the motor group is not connected or if the read operation fails.
-        """
-        if not self.isConnected:
-            raise DisconnectedException()
+        # """
+        # if not self.isConnected:
+        #     raise DisconnectedException()
 
         dxl_comm_result = groupSyncRead.txRxPacket()
         if dxl_comm_result != COMM_SUCCESS:
@@ -246,9 +249,9 @@ class MotorGroup:
             group (GroupSyncWrite): The group sync write object.
             values (list of numbers): The values to write to the motors.
         """
-        if not self.isConnected:
-            raise DisconnectedException()
-
+        # if not self.isConnected:
+        #     raise DisconnectedException()
+        
         group.clearParam()
         for index, DXL_ID in enumerate(self.parameters.DXL_IDs):
             if group.data_length == 2:
@@ -314,6 +317,15 @@ class MotorGroup:
         if any(t==1 for t in torques):
             self.enableTorque()
 
+    def enablePWMMode(self):
+        torques = self.isTorqueEnable()
+
+        if any(t==1 for t in torques):
+            self.disableTorque()
+        self.__setOperatingMode(self.parameters.PWM_MODE)
+        if any(t==1 for t in torques):
+            self.enableTorque()
+
 
     def enablePositionMode(self):
         torques = self.isTorqueEnable()
@@ -342,6 +354,13 @@ class MotorGroup:
         """
         self.__writeSyncMotorsData(self.groupWriters["goal_position"], positions)
 
+    def setGoalPWM(self, pwms):
+        """Set the goal velocity
+
+        Args:
+            speeds (list of numbers): unit depends on motor type
+        """
+        self.__writeSyncMotorsData(self.groupWriters["goal_pwm"] , pwms)
 
     def setVelocityProfile(self, max_vel):
         """Set the maximum velocities in position mode

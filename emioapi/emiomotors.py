@@ -46,6 +46,7 @@ class EmioMotors:
     _max_vel: float = 1000  # *0.01 rev/min
     _goal_velocity: list = field(default_factory=lambda: [0] * len(emioparameters.DXL_IDs))
     _goal_position: list = field(default_factory=lambda: [0] * len(emioparameters.DXL_IDs))
+    _goal_pwm: list = field(default_factory=lambda: [0] * len(emioparameters.DXL_IDs))
     _mg: motorgroup.MotorGroup = None
     _device_index: int = None
 
@@ -222,6 +223,8 @@ class EmioMotors:
     def enableExtendedPositionMode(self):
         self._mg.enableExtendedPositionMode()
 
+    def enablePWMMode(self):
+        self._mg.enablePWMMode()
 
     ####################
     #### PROPERTIES ####
@@ -274,6 +277,18 @@ class EmioMotors:
         with self._lock:
             self._mg.setGoalVelocity(velocities)
 
+
+    @property
+    def goal_pwm(self) -> list:
+        """Get the current velocity (rev/min) of the motors."""
+        return self._goal_pwm
+
+    @goal_pwm.setter
+    def goal_pwm(self, pwms: list):
+        """Set the goal velocity (rev/min) of the motors."""
+        self._goal_pwm = pwms
+        with self._lock:
+            self._mg.setGoalPWM(pwms)
 
     @property
     def max_velocity(self)-> list:

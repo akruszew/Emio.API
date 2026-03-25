@@ -34,12 +34,15 @@ TORQUE_DISABLE              = 0                 # Value for disabling the torque
 VELOCITY_MODE               = 1
 POSITION_MODE               = 3
 EXT_POSITION_MODE           = 4
+PWM_MODE                    = 16
 if MY_DXL == 'X_SERIES' or MY_DXL == 'MX_SERIES': #from https://emanual.robotis.com/docs/en/dxl/x/xm430-w210/
     ADDR_TORQUE_ENABLE          = 64
     ADDR_GOAL_POSITION          = 116
     LEN_GOAL_POSITION           = 4         # Data Byte Length
     ADDR_GOAL_VELOCITY          = 104
     LEN_GOAL_VELOCITY           = 4         # Data Byte Length
+    ADDR_GOAL_PWM               = 100
+    LEN_GOAL_PWM                = 2
     ADDR_PRESENT_POSITION       = 132
     LEN_PRESENT_POSITION        = 4         # Data Byte Length
     ADDR_PRESENT_VELOCITY       = 128
