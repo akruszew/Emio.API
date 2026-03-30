@@ -225,8 +225,6 @@ class MotorGroup:
         Raises:
             Exception: If the motor group is not connected or if the read operation fails.
         # """
-        # if not self.isConnected:
-        #     raise DisconnectedException()
 
         dxl_comm_result = groupSyncRead.txRxPacket()
         if dxl_comm_result != COMM_SUCCESS:
