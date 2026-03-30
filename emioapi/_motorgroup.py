@@ -247,8 +247,6 @@ class MotorGroup:
             group (GroupSyncWrite): The group sync write object.
             values (list of numbers): The values to write to the motors.
         """
-        # if not self.isConnected:
-        #     raise DisconnectedException()
         
         group.clearParam()
         for index, DXL_ID in enumerate(self.parameters.DXL_IDs):
