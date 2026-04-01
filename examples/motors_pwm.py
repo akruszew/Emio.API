@@ -25,7 +25,7 @@ def main(emio: EmioMotors, loops=500, motor_id=1):
         - motor_id: ID of the motor to test (0-3).
     '''
     # Enable PWM mode
-    emio._mg.enablePWMMode()
+    emio.enablePWMMode()
     time.sleep(1)
     emio.printStatus()
 

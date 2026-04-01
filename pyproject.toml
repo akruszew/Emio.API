@@ -72,3 +72,8 @@ Class = 2
 Method = 3
 Function = 3
 Data = 3
+
+[dependency-groups]
+dev = [
+    "matplotlib>=3.10.8",
+]
