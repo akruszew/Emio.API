@@ -344,6 +344,33 @@ class PositionEstimation:
 
         return True
 
+    def camera_image_to_simulation_plane_intersection(self, x: int, y: int, plane_n: np.ndarray, plane_d: float) -> list[float]:
+        """
+        Calculate the position of the object in our frame space by projecting the ray from the camera to the image point on a plane.
+
+        Args
+        x,y: int
+            The pixel coordinates
+
+        plane_n: np.ndarray
+            The normal vector of the plane
+
+        plane_d: float
+            The distance of the plane from the origin along its normal vector
+
+        Return:
+            position: numpy.ndarray
+                The real world coordinates of the object in the Emio frame space
+        """
+        ray_world = self.camera_image_to_simulation(x, y, 1.0) - self.t
+        camera_pos_world = self.t
+        denom = plane_n.dot(ray_world)
+        
+        if abs(denom) < 1e-6:
+            raise ValueError("Ray is parallel to the plane")
+        s = - (plane_n.dot(camera_pos_world) + plane_d) / denom
+        result = camera_pos_world + s * ray_world
+        return [result[0], result[1], result[2]]
     
     def camera_image_to_simulation(self, x: int, y: int, depth: float) -> list[float]:
         """

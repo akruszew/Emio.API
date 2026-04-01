@@ -68,6 +68,7 @@ class DepthCamera:
     parameter = {}
     tracking = True
     trackers_pos = []
+    trackers_pos_image = []
     maskWindow = None
     frameWindow = None
     hsvWindow = None
@@ -332,11 +333,12 @@ class DepthCamera:
                 areas = [cv.contourArea(cnt) for cnt in contours]
 
                 self.trackers_pos = []
+                self.trackers_pos_image = []
                 for i, a in enumerate(areas):
                     if a > self.parameter['area']:
                         x, y = compute_contour_center(contours[i])
                         marker_mask = np.zeros_like(mask)
-
+                        self.trackers_pos_image.append([x,y])
                         depth = compute_median_depth(contours[i], self.depth_frame) if self.depth_frame[y, x] == 0 else self.depth_frame[y, x]
                         worldx, worldy, worldz = self.position_estimator.camera_image_to_simulation(x, y, depth)
                         self.trackers_pos.append([worldx, worldy, worldz])
