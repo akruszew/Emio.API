@@ -159,6 +159,7 @@ class EmioCamera:
             value: bool: The new tracking status.
         """
         self._tracking = value
+        self._camera.tracking = self._tracking
 
     @property
     def compute_point_cloud(self) -> bool:

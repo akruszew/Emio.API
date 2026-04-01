@@ -66,7 +66,7 @@ class DepthCamera:
     compute_point_cloud = False
     position_estimator: PositionEstimation = None
     parameter = {}
-    tracking = True
+    tracking = False
     trackers_pos = []
     maskWindow = None
     frameWindow = None
