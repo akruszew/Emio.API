@@ -268,7 +268,8 @@ class DepthCamera:
                 _, color_image, depth_image, _ = self.get_frame()
                 success = self.position_estimator.calibrate(color_image, depth_image, first, calibration_window)
                 first = success if not first else first
-                self.rootWindow.update()
+                if self.show_video_feed:
+                    self.rootWindow.update()
 
         if success:
             self.position_estimator.compute_camera_to_simulation_transform()
