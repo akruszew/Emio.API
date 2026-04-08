@@ -52,7 +52,7 @@ def main():
 
     motors.angles = init_angles
 
-    motors.position_p_gain = [15800, 800, 15800, 800]
+    motors.position_p_gain = [8800, 800, 8800, 800]
     motors.position_i_gain = [0, 0, 0, 0]
     motors.position_d_gain = [0, 0, 0, 0]
     print("Set second PID gains.")
