@@ -265,7 +265,6 @@ class PositionEstimation:
             logger.error(f"Frame {self.count_calibration_frames}: More than one Aruco marker detected: {ids}")
             return False
 
-        logger.info(f"{self.count_calibration_frames}")
         if not aggregate:
             self.trackers_pos = np.zeros((COUNT_POINTS, 3))
             self.points = np.zeros((COUNT_POINTS, 2))  # Initialize points array with 5 points and 2 coordinates (x, y)
@@ -344,7 +343,7 @@ class PositionEstimation:
                         (int(corners[0][0][i][0]), int(corners[0][0][i][1])), 
                         cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1) for i in range(len(corners[0][0]))]
         frame = cv.putText(frame, f"Calibration progress: {self.count_calibration_frames}/200", (10, 30), 
-                            cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+                            cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
 
         if window:
             window.set_frame(frame)
