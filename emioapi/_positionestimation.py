@@ -252,13 +252,20 @@ class PositionEstimation:
         if ids is None:
             logger.error(f"Frame {self.count_calibration_frames}: No Aruco markers detected")
             return False
-        if len(ids)>1:
-            logger.error(f"Frame {self.count_calibration_frames}: More than one Aruco marker detected")
+        # check if the ids contains 672
+        if 672 not in ids[0]:
+            logger.error(f"Frame {self.count_calibration_frames}: Aruco marker ID 672 not detected: {ids}")
             return False
-        if ids[0] != 672: # ID of the Aruco marker provided with Emio
-            logger.error(f"Frame {self.count_calibration_frames}: Aruco marker ID is not 672: {ids}")
-            return False
+        # isolate the corners of the marker with id 672
+        index_672 = np.where(ids == 672)[0][0]
+        corners = np.array([corners[index_672]])
+        ids = np.array([ids[index_672]])
         
+        if len(ids)>1:
+            logger.error(f"Frame {self.count_calibration_frames}: More than one Aruco marker detected: {ids}")
+            return False
+
+        logger.info(f"{self.count_calibration_frames}")
         if not aggregate:
             self.trackers_pos = np.zeros((COUNT_POINTS, 3))
             self.points = np.zeros((COUNT_POINTS, 2))  # Initialize points array with 5 points and 2 coordinates (x, y)
@@ -297,7 +304,7 @@ class PositionEstimation:
                 logger.debug(f"Skipping frame: Depth value is 0 for corner {i} at position ({temp_points[i][0]}, {temp_points[i][1]})")
                 return False
             temp_trackers_pos[i][2] = depth
-
+        
         # Average the corners positions
         x, y = np.mean(corners[0][0], axis=0)
         x = int(x)
@@ -317,7 +324,7 @@ class PositionEstimation:
         self.trackers_pos = temp_trackers_pos if not aggregate else self.trackers_pos + temp_trackers_pos
 
         self.count_calibration_frames += 1
-
+        
         # Write the information in a CSV file for the next calibration processes
         points_2d = [(int(self.points[i][0]/self.count_calibration_frames), int(self.points[i][1]/self.count_calibration_frames), self.trackers_pos[i][2]/self.count_calibration_frames, ids[0][0]) for i in range(len(self.points))]
         with open(CALIBRATION_FILENAME, 'w', newline='') as file:
@@ -344,6 +351,33 @@ class PositionEstimation:
 
         return True
 
+    def camera_image_to_simulation_plane_intersection(self, x: int, y: int, plane_n: np.ndarray, plane_d: float) -> list[float]:
+        """
+        Calculate the position of the object in our frame space by projecting the ray from the camera to the image point on a plane.
+
+        Args
+        x,y: int
+            The pixel coordinates
+
+        plane_n: np.ndarray
+            The normal vector of the plane
+
+        plane_d: float
+            The distance of the plane from the origin along its normal vector
+
+        Return:
+            position: numpy.ndarray
+                The real world coordinates of the object in the Emio frame space
+        """
+        ray_world = self.camera_image_to_simulation(x, y, 1.0) - self.t
+        camera_pos_world = self.t
+        denom = plane_n.dot(ray_world)
+        
+        if abs(denom) < 1e-6:
+            raise ValueError("Ray is parallel to the plane")
+        s = - (plane_n.dot(camera_pos_world) + plane_d) / denom
+        result = camera_pos_world + s * ray_world
+        return [result[0], result[1], result[2]]
     
     def camera_image_to_simulation(self, x: int, y: int, depth: float) -> list[float]:
         """
