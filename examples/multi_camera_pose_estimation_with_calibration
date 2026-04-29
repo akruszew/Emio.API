@@ -4,53 +4,16 @@ import time
 import logging
 import os
 import sys
-from qpsolvers import Problem, solve_problem, available_solvers
+
+
 import threading
 import cv2
 sys.path.append(os.path.dirname(os.path.realpath(__file__))+'/..')
 from emioapi import EmioCamera
 from emioapi._logging_config import logger
 import numpy as np
+import triangulation
 
-class ray:
-    def __init__(self,origin,direction):
-        self.origin = origin
-        self.direction = direction/np.linalg.norm(direction)
-
-def triangulate(rays: list[ray]):
-    """
-    Solve the quadratic programming problem:
-        minimize (1/2) x^T P x + q^T x
-        subject to A x = b
-                   G x <= h
-                   lb <= x <= ub    
-    Args:        rays: list of rays, each ray is defined by an origin and a direction
-    Returns:        x: Solution vector (3,) the triangulated position
-                    errors: list of errors for each ray, the distance from the triangulated position to the ray
-    """
-    R = np.zeros((len(rays),3,3+len(rays)))
-    P = np.zeros((3+len(rays),3+len(rays)))
-    q = np.zeros((3+len(rays),))
-    for i in range(len(rays)):
-        R[i][0:3,0:3] = np.eye(3)
-        R[i][0:3,3+i] = -rays[i].direction   
-        P += R[i].T @ R[i]
-        q += -R[i].T @ rays[i].origin
-
-    problem = Problem(P, q)
-    solution = solve_problem(problem, solver="clarabel")
-    # Use the OSQP solver as an example. You can choose any other solver available in qpsolvers.
-    if (solution.x is None):
-        logger.warning("QP solver failed to find a solution.")
-        return None,None   
-    
-    errors = []
-    for i in range(len(rays)):
-        error = np.linalg.norm(R[i] @ solution.x - rays[i].origin)
-        errors.append(error)
-  
-    
-    return solution.x[0:3],errors
     
 def calibrate(camera: EmioCamera, marker_position_dic: dict[int, np.ndarray]):
     # ArUco marker detection setup
@@ -67,53 +30,57 @@ def calibrate(camera: EmioCamera, marker_position_dic: dict[int, np.ndarray]):
     dist_coeffs = np.zeros((4, 1))
 
     marker_size = 70
+    marker_points = np.array([
+                [-marker_size/2, marker_size/2, 0],
+                [marker_size/2, marker_size/2, 0],
+                [marker_size/2, -marker_size/2, 0],
+                [-marker_size/2, -marker_size/2, 0]
+            ], dtype=np.float32)
+    
     for i in range(100): # wait the auto exposure to adjust
         ret, color_frame, depth_frame, depth_rsframe = camera._camera.get_frame()
+        
     gray = cv2.cvtColor(color_frame, cv2.COLOR_BGR2GRAY)
     _,thresh_image = cv2.threshold(gray,95,255,cv2.THRESH_TOZERO)
-    image = thresh_image
-            # Detect ArUco markers
+    
+    # Detect ArUco markers
     corners, ids, rejected = detector.detectMarkers(thresh_image)
     if ids is None or len(ids) == 0:
         logger.warning(f"No ArUco markers detected for camera {camera.camera_serial}. Calibration failed.")
         return
+    
     success = False
     rvec = None
     tvec = None
+
     obj_points = np.empty((0,3), dtype=np.float32)
     obj_corners = np.empty((0,2), dtype=np.float32)
-
     for i in range(len(ids)):
         id = int(ids[i][0])
         # 3D object points of marker corners
 
         if id in marker_position_dic.keys():
             marker_position = marker_position_dic[id]
-            obj_points = np.vstack([obj_points, np.array([
-                [-marker_size/2, marker_size/2, 0],
-                [marker_size/2, marker_size/2, 0],
-                [marker_size/2, -marker_size/2, 0],
-                [-marker_size/2, -marker_size/2, 0]
-            ], dtype=np.float32) + marker_position])
-
+            obj_points = np.vstack([obj_points, marker_points + marker_position])
             obj_corners = np.vstack([obj_corners, [corners[i][0][j] for j in range(4)]])
             logger.info(f"Camera {camera.camera_serial} detected marker {id} at position {marker_position}.")
 
         
     if len(obj_points) > 0:
-        
         success, rvec, tvec = cv2.solvePnP(
             obj_points,
             obj_corners,
             camera_matrix,
             dist_coeffs,
         )
+
     if success and rvec is not None and tvec is not None:
         rotation_matrix, _ = cv2.Rodrigues(rvec)
         # location of the camera in the marker reference frame is given by -R^T * tvec
         camera_position = -rotation_matrix.T @ tvec.flatten()
         # camera orientation in the marker reference frame is given by R^T
         camera_orientation = rotation_matrix.T
+
 
         camera._camera.position_estimator.R = camera_orientation
         camera._camera.position_estimator.t = camera_position
@@ -168,19 +135,66 @@ def main(cameras: list[EmioCamera]):
             logger.info(info)
             current_time = time.time()
             rays = []
-            for camera in cameras:
+            uvs = []
+            Rs = []
+            Ts = []
+            Ks = []
+            detections = [[] for _ in range(len(cameras))] # list of list of (u,v) in pixels for each camera
+
+            for id_camera in range(len(cameras)):
+                camera = cameras[id_camera]
+                # Always add camera parameters, even if no trackers
+                R_cw = camera._camera.position_estimator.R.T
+                t_cw = -R_cw @ camera._camera.position_estimator.t.reshape(3, 1)
+                Rs.append(R_cw)
+                Ts.append(t_cw)
+                intrinsics = camera._camera.intr    
+                camera_matrix = np.array([
+                    [intrinsics.fx, 0, intrinsics.ppx],
+                    [0, intrinsics.fy, intrinsics.ppy],
+                    [0, 0, 1]
+                        ], dtype=np.float32)
+                Ks.append(camera_matrix)
+                
                 if len(camera.trackers_pos) > 0:
                     x = camera._trackers_pos_camera_image[0][0]
                     y = camera._trackers_pos_camera_image[0][1]
-                    rays.append(ray(camera._camera.position_estimator.t, camera._camera.position_estimator.camera_image_to_simulation(x, y, 1.0) - camera._camera.position_estimator.t))
-                    logger.info(f"Trackers pqositions Camera {camera.camera_serial}: {np.round(camera.trackers_pos[0], decimals=2)}")
-            
-            estimation, estimation_errors = triangulate(rays)
+                    rays.append(triangulation.ray(camera._camera.position_estimator.t, camera._camera.position_estimator.camera_image_to_simulation(x, y, 1.0) - camera._camera.position_estimator.t))
+                    uvs.append((x, y))
+                    logger.info(f"Trackers positions Camera {camera.camera_serial}: {np.round(camera.trackers_pos[0], decimals=2)}")
+                for tracker in camera._trackers_pos_camera_image:
+                    detections[id_camera].append((tracker[0],tracker[1]))    
+            current_time = time.time()    
+            estimation_nview, estimation_errors_nv = triangulation.triangulate_nview(
+                Ks, 
+                Rs, 
+                Ts, 
+                uvs, robust=True
+            )
+            logger.info(f"Triangulation with LM refinement time: {time.time() - current_time:.4f} seconds")
+            if estimation_nview is not None:
+                logger.info(f"Triangulated position with LM refinement: {np.round(estimation_nview.T, decimals=2)}")
+                logger.info(f"Reprojection error with LM refinement: {np.round(estimation_errors_nv['rms_reproj_px'], decimals=2)} pixels")
+            current_time = time.time()
+            estimation, estimation_errors = triangulation.point_closest_to_rays(rays)
             logger.info(f"Triangulation time: {time.time() - current_time:.4f} seconds")
             if estimation is not None:
                 logger.info(f"Triangulated position: {np.round(estimation.T, decimals=2)}")
-                logger.info(f"Errors: {np.round(estimation_errors, decimals=2)}")
+                logger.info(f"Errors: {np.round(estimation_errors, decimals=2)}") 
 
+
+            # detections[c] = list of (u,v) in pixels for camera c at current frame
+            current_time = time.time()
+            matches = triangulation.match_ncams_one_frame(detections, Ks, Rs, Ts,
+                               ref=0,
+                               epi_gate_px=5.0,
+                               reproj_gate_px=5.0,
+                               beam_width=50,
+                               min_views=2)
+            print(f"Matches: {len(matches)}")
+            for m in matches:
+                print("views:", m["views"], "rms:", m["rms"], "idx_map:", m["idx"], "X:", m["X"])
+            logger.info(f"Matching time: {time.time() - current_time:.4f} seconds")
             time.sleep(0.1)
         except KeyboardInterrupt:
             logger.info("Keyboard interrupt received.")
@@ -188,6 +202,7 @@ def main(cameras: list[EmioCamera]):
         except Exception as e:
             logger.exception(f"Error during communication: {e}")
             break
+
 
 
 if __name__ == "__main__":
