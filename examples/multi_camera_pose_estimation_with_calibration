@@ -52,7 +52,7 @@ def triangulate(rays: list[ray]):
     
     return solution.x[0:3],errors
     
-def calibrate(camera: EmioCamera):
+def calibrate(camera: EmioCamera, marker_position_dic: dict[int, np.ndarray]):
     # ArUco marker detection setup
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_ARUCO_ORIGINAL)
     parameters = cv2.aruco.DetectorParameters()
@@ -80,23 +80,34 @@ def calibrate(camera: EmioCamera):
     success = False
     rvec = None
     tvec = None
+    obj_points = np.empty((0,3), dtype=np.float32)
+    obj_corners = np.empty((0,2), dtype=np.float32)
+
     for i in range(len(ids)):
-                    # 3D object points of marker corners
-        if ids[i][0] == 672:
-            obj_points = np.array([
+        id = int(ids[i][0])
+        # 3D object points of marker corners
+
+        if id in marker_position_dic.keys():
+            marker_position = marker_position_dic[id]
+            obj_points = np.vstack([obj_points, np.array([
                 [-marker_size/2, marker_size/2, 0],
                 [marker_size/2, marker_size/2, 0],
                 [marker_size/2, -marker_size/2, 0],
                 [-marker_size/2, -marker_size/2, 0]
-            ], dtype=np.float32)
+            ], dtype=np.float32) + marker_position])
 
-            # Solve PnP
-            success, rvec, tvec = cv2.solvePnP(
-                obj_points,
-                corners[i],
-                camera_matrix,
-                dist_coeffs
-            )
+            obj_corners = np.vstack([obj_corners, [corners[i][0][j] for j in range(4)]])
+            logger.info(f"Camera {camera.camera_serial} detected marker {id} at position {marker_position}.")
+
+        
+    if len(obj_points) > 0:
+        
+        success, rvec, tvec = cv2.solvePnP(
+            obj_points,
+            obj_corners,
+            camera_matrix,
+            dist_coeffs,
+        )
     if success and rvec is not None and tvec is not None:
         rotation_matrix, _ = cv2.Rodrigues(rvec)
         # location of the camera in the marker reference frame is given by -R^T * tvec
@@ -109,26 +120,33 @@ def calibrate(camera: EmioCamera):
         logger.debug(f"Camera {camera.camera_serial} position estimator set with R:\n{rotation_matrix.T}\nt:\n{camera_position}")
     logger.info(f"Camera {camera.camera_serial} calibrated.")
 
+
+def create_marker_position_dictionary():
+    # Create a dictionary to store the positions of the markers
+    marker_positions = {
+        672: np.array([0, 0, 0]),  # Marker ID 672 at the origin
+        42: np.array([84, 0, 0]),  # Marker ID 42 at (84mm, 0, 0)
+        # Add more markers here if needed
+    }
+    return marker_positions
+
 def main(cameras: list[EmioCamera]):
     logger.info("Calibrating cameras...")
     threads = []
     start_time = time.time()
-    # for camera in cameras:
-    #     calibrate(camera)  # calibrate each camera sequentially to avoid potential conflicts in accessing the camera hardware
-    #     logger.info(f"Camera {camera.camera_serial} calibration completed. {camera._camera.position_estimator.t}")
+    marker_position_dic = create_marker_position_dictionary()
     
     for camera in cameras:
-        thread = threading.Thread(target=calibrate, args=(camera,))
+        thread = threading.Thread(target=calibrate, args=(camera,marker_position_dic))
         threads.append(thread)
         thread.start()
+        #calibrate(camera,marker_position_dic)
+
 
     for thread in threads:
         thread.join()
-    logger.info(f"All cameras calibrated in {time.time() - start_time:.2f} seconds.")
-    
-    
-        
-
+    logger.info(f"Calibration completed in {time.time() - start_time:.2f} seconds.")
+    input("Press Enter to start pose estimation...")
     while cameras[0].is_running:  # Assuming all cameras have the same running state
         try:
             current_time = time.time()
