@@ -324,7 +324,7 @@ class ray:
         self.origin = origin
         self.direction = direction / np.linalg.norm(direction)
 
-def point_closest_to_rays(rays: list[ray]):
+def point_closest_to_rays(rays: list[ray])-> Tuple[Optional[np.ndarray], np.ndarray]:
     """
     Find the 3D point that minimizes the sum of squared distances to multiple rays.
 
@@ -360,13 +360,9 @@ def point_closest_to_rays(rays: list[ray]):
     # Use the OSQP solver as an example. You can choose any other solver available in qpsolvers.
     if (solution.x is None):
         logger.warning("QP solver failed to find a solution.")
-        return None, None
+        return None, np.array([float('inf')] * len(rays))
 
-    errors = []
-    for i in range(len(rays)):
-        error = np.linalg.norm(R[i] @ solution.x - rays[i].origin)
-        errors.append(error)
-
+    errors = np.array([np.linalg.norm(R[i] @ solution.x - rays[i].origin) for i in range(len(rays))])
     return solution.x[0:3], errors
 
 
