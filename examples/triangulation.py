@@ -496,6 +496,189 @@ def rms_reproj(Ps: List[np.ndarray], uvs: List[Tuple[int, Tuple[float, float]]],
     return float(np.sqrt(np.mean(errs**2)))
 
 
+def _validate_match_inputs(detections: List[List[Tuple[float, float]]],
+                           Ks: List[np.ndarray],
+                           Rs: List[np.ndarray],
+                           Ts: List[np.ndarray],
+                           ref: int) -> int:
+    """
+    Validate inputs for multi-camera matching.
+
+    Args:
+        detections: List of detections per camera
+        Ks: List of intrinsic matrices
+        Rs: List of rotation matrices
+        Ts: List of translation vectors
+        ref: Reference camera index
+
+    Returns:
+        Number of cameras N
+
+    Raises:
+        ValueError: If inputs are invalid
+    """
+    N = len(detections)
+    if N == 0 or len(Ks) != N or len(Rs) != N or len(Ts) != N:
+        raise ValueError("Inconsistent number of cameras in inputs")
+    if ref < 0 or ref >= N:
+        raise ValueError(f"Invalid reference camera index {ref}")
+    return N
+
+def _expand_hypotheses(hyps: List[Tuple[Dict[int, int], List[Tuple[int, Tuple[float, float]]]]],
+                      cam: int,
+                      det_cam: List[Tuple[float, float]],
+                      F: Dict[Tuple[int, int], np.ndarray],
+                      ref: int,
+                      uv_ref: Tuple[float, float],
+                      epi_gate_px: float) -> List[Tuple[Dict[int, int], List[Tuple[int, Tuple[float, float]]]]]:
+    """
+    Expand hypotheses to include detections from a new camera.
+
+    Args:
+        hyps: Current hypotheses (idx_map, observations)
+        cam: Camera index to expand to
+        det_cam: Detections in current camera
+        F: Fundamental matrices dictionary
+        ref: Reference camera index
+        uv_ref: Reference detection coordinates
+        epi_gate_px: Epipolar distance threshold
+
+    Returns:
+        Expanded list of hypotheses
+    """
+    new_hyps = []
+
+    for idx_map, obs in hyps:
+        # Find candidate detections that are epipolar compatible
+        cand = []
+        for j, uv_j in enumerate(det_cam):
+            if epi_compatible(F, ref, uv_ref, cam, uv_j, epi_gate_px):
+                cand.append((j, uv_j))
+
+        # Allow missing view (skip this camera) to handle occlusions
+        new_hyps.append((idx_map, obs))
+
+        # Add hypotheses with each compatible detection
+        for j, uv_j in cand:
+            idx_map2 = dict(idx_map)
+            idx_map2[cam] = j
+            obs2 = obs + [(cam, uv_j)]
+            new_hyps.append((idx_map2, obs2))
+
+    return new_hyps
+
+def _score_hypotheses(hyps: List[Tuple[Dict[int, int], List[Tuple[int, Tuple[float, float]]]]],
+                     Ps: List[np.ndarray],
+                     Rs: List[np.ndarray],
+                     Ts: List[np.ndarray],
+                     beam_width: int) -> List[Tuple[Dict[int, int], List[Tuple[int, Tuple[float, float]]]]]:
+    """
+    Score hypotheses and keep the best ones.
+
+    Args:
+        hyps: Hypotheses to score
+        Ps: Projection matrices
+        Rs: Rotation matrices
+        Ts: Translation vectors
+        beam_width: Maximum number of hypotheses to keep
+
+    Returns:
+        Scored and pruned hypotheses
+    """
+    scored = []
+    for idx_map, obs in hyps:
+        if len(obs) >= 2:
+            uvs_only = [uv for cam, uv in obs]
+            X = triangulate_dlt(Ps, uvs_only)
+            # Check cheirality (positive depth) for all cameras used
+            ok = True
+            for c, _ in obs:
+                if not positive_depth(Rs[c], Ts[c], X):
+                    ok = False
+                    break
+            if not ok:
+                continue
+            rms = rms_reproj(Ps, obs, X)
+            scored.append((rms, idx_map, obs, X))
+        else:
+            # Single view: cannot score yet, assign high cost
+            scored.append((HIGH_COST, idx_map, obs, None))
+
+    # Keep only the best hypotheses
+    scored.sort(key=lambda x: x[0])
+    return [(idx_map, obs) for _, idx_map, obs, _ in scored[:beam_width]]
+
+def _finalize_hypotheses(hyps: List[Tuple[Dict[int, int], List[Tuple[int, Tuple[float, float]]]]],
+                        Ps: List[np.ndarray],
+                        Rs: List[np.ndarray],
+                        Ts: List[np.ndarray],
+                        min_views: int,
+                        reproj_gate_px: float,
+                        iref: int) -> List[Dict[str, Any]]:
+    """
+    Finalize hypotheses by validating triangulation quality.
+
+    Args:
+        hyps: Hypotheses to finalize
+        Ps: Projection matrices
+        Rs: Rotation matrices
+        Ts: Translation vectors
+        min_views: Minimum number of views required
+        reproj_gate_px: Maximum reprojection error threshold
+        iref: Reference detection index
+
+    Returns:
+        List of valid proposals
+    """
+    proposals = []
+    for idx_map, obs in hyps:
+        if len(obs) < min_views:
+            continue
+        uvs_only = [uv for cam, uv in obs]
+        X = triangulate_dlt(Ps, uvs_only)
+        if not all(positive_depth(Rs[c], Ts[c], X) for c, _ in obs):
+            continue
+        rms = rms_reproj(Ps, obs, X)
+        if rms <= reproj_gate_px:
+            proposals.append({
+                "idx": idx_map,        # dict cam -> det index
+                "X": X,
+                "rms": rms,
+                "views": len(obs),
+                "ref_idx": iref
+            })
+    return proposals
+
+def _select_matches(proposals: List[Dict[str, Any]], N: int) -> List[Dict[str, Any]]:
+    """
+    Perform global conflict resolution to select non-conflicting matches.
+
+    Args:
+        proposals: List of proposal dictionaries
+        N: Number of cameras
+
+    Returns:
+        List of selected matches without conflicts
+    """
+    # Sort by (reprojection_error, -num_views) - prefer low error, then more views
+    proposals.sort(key=lambda p: (p["rms"], -p["views"]))
+    print(f"Proposals: {len(proposals)}")
+    used = {c: set() for c in range(N)}  # Track used detections per camera
+    matches = []
+    for p in proposals:
+        # Check for conflicts (same detection used in same camera)
+        conflict = False
+        for c, j in p["idx"].items():
+            if j in used[c]:
+                conflict = True
+                break
+        if conflict:
+            continue
+        # Mark detections as used and add to matches
+        for c, j in p["idx"].items():
+            used[c].add(j)
+        matches.append(p)
+    return matches
 def match_ncams_one_frame(detections: List[List[Tuple[float, float]]],
                           Ks: List[np.ndarray],
                           Rs: List[np.ndarray],
@@ -534,12 +717,7 @@ def match_ncams_one_frame(detections: List[List[Tuple[float, float]]],
     Raises:
         ValueError: If input dimensions are inconsistent or invalid
     """
-    N = len(detections)
-    if N == 0 or len(Ks) != N or len(Rs) != N or len(Ts) != N:
-        raise ValueError("Inconsistent number of cameras in inputs")
-    if ref < 0 or ref >= N:
-        raise ValueError(f"Invalid reference camera index {ref}")
-
+    N = _validate_match_inputs(detections, Ks, Rs, Ts, ref)
     Ps, F = precompute_P_and_F(Ks, Rs, Ts)
 
     det_ref = detections[ref]
@@ -555,86 +733,12 @@ def match_ncams_one_frame(detections: List[List[Tuple[float, float]]],
             if cam == ref:
                 continue
 
-            new_hyps = []
             det_cam = detections[cam]
+            hyps = _expand_hypotheses(hyps, cam, det_cam, F, ref, uv_ref, epi_gate_px)
+            hyps = _score_hypotheses(hyps, Ps, Rs, Ts, beam_width)
 
-            for idx_map, obs in hyps:
-                # Find candidate detections in current camera that are epipolar compatible
-                cand = []
-                for j, uv_j in enumerate(det_cam):
-                    if epi_compatible(F, ref, uv_ref, cam, uv_j, epi_gate_px):
-                        cand.append((j, uv_j))
+        # Finalize valid hypotheses
+        proposals.extend(_finalize_hypotheses(hyps, Ps, Rs, Ts, min_views, reproj_gate_px, iref))
 
-                # Allow missing view (skip this camera) to handle occlusions
-                new_hyps.append((idx_map, obs))
-
-                # Add hypotheses with each compatible detection
-                for j, uv_j in cand:
-                    idx_map2 = dict(idx_map)
-                    idx_map2[cam] = j
-                    obs2 = obs + [(cam, uv_j)]
-                    new_hyps.append((idx_map2, obs2))
-
-            # Score and prune hypotheses: triangulate if >=2 views, keep best beam_width
-            scored = []
-            for idx_map, obs in new_hyps:
-                if len(obs) >= 2:
-                    uvs_only = [uv for cam, uv in obs]
-                    X = triangulate_dlt(Ps, uvs_only)
-                    # Check cheirality (positive depth) for all cameras used
-                    ok = True
-                    for c, _ in obs:
-                        if not positive_depth(Rs[c], Ts[c], X):
-                            ok = False
-                            break
-                    if not ok:
-                        continue
-                    rms = rms_reproj(Ps, obs, X)
-                    scored.append((rms, idx_map, obs, X))
-                else:
-                    # Single view: cannot score yet, assign high cost
-                    scored.append((HIGH_COST, idx_map, obs, None))
-
-            # Keep only the best hypotheses
-            scored.sort(key=lambda x: x[0])
-            hyps = []
-            for rms, idx_map, obs, X in scored[:beam_width]:
-                hyps.append((idx_map, obs))
-
-        # finalize: keep hypotheses with enough views + low reprojection
-        for idx_map, obs in hyps:
-            if len(obs) < min_views:
-                continue
-            uvs_only = [uv for cam, uv in obs]
-            X = triangulate_dlt(Ps, uvs_only)
-            if not all(positive_depth(Rs[c], Ts[c], X) for c, _ in obs):
-                continue
-            rms = rms_reproj(Ps, obs, X)
-            if rms <= reproj_gate_px:
-                proposals.append({
-                    "idx": idx_map,        # dict cam -> det index
-                    "X": X,
-                    "rms": rms,
-                    "views": len(obs),
-                    "ref_idx": iref
-                })
-
-    # Global selection to avoid reusing same blob in same camera
-    # Greedy by best (rms, -views) works well for ~10 points.
-    proposals.sort(key=lambda p: (p["rms"], -p["views"]))
-    print(f"Proposals: {len(proposals)}")
-    used = {c: set() for c in range(N)}
-    matches = []
-    for p in proposals:
-        conflict = False
-        for c, j in p["idx"].items():
-            if j in used[c]:
-                conflict = True
-                break
-        if conflict:
-            continue
-        for c, j in p["idx"].items():
-            used[c].add(j)
-        matches.append(p)
-
-    return matches
+    # Global conflict resolution
+    return _select_matches(proposals, N)
