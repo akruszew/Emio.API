@@ -476,11 +476,9 @@ def rms_reproj(Ps: List[np.ndarray], uvs: List[Tuple[int, Tuple[float, float]]],
         Root mean square reprojection error in pixels
 
     Raises:
-        ValueError: If inputs have inconsistent lengths or shapes
+        ValueError: If camera index in uvs is out of range of Ps
     """
-    if len(Ps) != len(uvs) or X.shape not in [(3,), (3, 1)]:
-        raise ValueError("Inconsistent input dimensions for RMS computation")
-
+    
     errs = []
     for cam, uv_obs in uvs:
         if cam >= len(Ps):
@@ -585,7 +583,10 @@ def _score_hypotheses(hyps: List[Tuple[Dict[int, int], List[Tuple[int, Tuple[flo
     for idx_map, obs in hyps:
         if len(obs) >= 2:
             uvs_only = [uv for cam, uv in obs]
-            X = triangulate_dlt(Ps, uvs_only)
+            cams = [cam for cam, uv in obs]
+            Ps_cams = [Ps[cam] for cam in cams]
+            X = triangulate_dlt(Ps_cams, uvs_only)
+            #X = triangulate_dlt(Ps, uvs_only)
             # Check cheirality (positive depth) for all cameras used
             ok = True
             for c, _ in obs:
@@ -626,12 +627,17 @@ def _finalize_hypotheses(hyps: List[Tuple[Dict[int, int], List[Tuple[int, Tuple[
     Returns:
         List of valid proposals
     """
+    
     proposals = []
     for idx_map, obs in hyps:
         if len(obs) < min_views:
             continue
+        
         uvs_only = [uv for cam, uv in obs]
-        X = triangulate_dlt(Ps, uvs_only)
+        cams = [cam for cam, uv in obs]
+        Ps_cams = [Ps[cam] for cam in cams]
+        X = triangulate_dlt(Ps_cams, uvs_only)
+        #X = triangulate_dlt(Ps, uvs_only)
         if not all(positive_depth(Rs[c], Ts[c], X) for c, _ in obs):
             continue
         rms = rms_reproj(Ps, obs, X)
@@ -658,7 +664,6 @@ def _select_matches(proposals: List[Dict[str, Any]], N: int) -> List[Dict[str, A
     """
     # Sort by (reprojection_error, -num_views) - prefer low error, then more views
     proposals.sort(key=lambda p: (p["rms"], -p["views"]))
-    print(f"Proposals: {len(proposals)}")
     used = {c: set() for c in range(N)}  # Track used detections per camera
     matches = []
     for p in proposals:
@@ -718,23 +723,22 @@ def match_ncams_one_frame(detections: List[List[Tuple[float, float]]],
 
     det_ref = detections[ref]
     proposals = []
-
-    # Beam search: for each detection in reference camera, build hypotheses
-    for iref, uv_ref in enumerate(det_ref):
-        # Initialize hypothesis with reference detection
-        hyps = [({ref: iref}, [(ref, uv_ref)])]
-
-        # Expand hypotheses to other cameras using epipolar constraints
-        for cam in range(N):
-            if cam == ref:
-                continue
-
-            det_cam = detections[cam]
-            hyps = _expand_hypotheses(hyps, cam, det_cam, F, ref, uv_ref, epi_gate_px)
-            hyps = _score_hypotheses(hyps, Ps, Rs, Ts, beam_width)
-
-        # Finalize valid hypotheses
-        proposals.extend(_finalize_hypotheses(hyps, Ps, Rs, Ts, min_views, reproj_gate_px, iref))
-
-    # Global conflict resolution
+    for i in range(N):
+        ref = i
+        det_ref = detections[i]
+        # Beam search: for each detection in reference camera, build hypotheses
+        for iref, uv_ref in enumerate(det_ref):
+            # Initialize hypothesis with reference detection
+            hyps = [({ref: iref}, [(ref, uv_ref)])]
+            # Expand hypotheses to other cameras using epipolar constraints
+            for cam in range(N):
+                if cam == ref:
+                    continue
+                det_cam = detections[cam]
+                hyps = _expand_hypotheses(hyps, cam, det_cam, F, ref, uv_ref, epi_gate_px)
+                hyps = _score_hypotheses(hyps, Ps, Rs, Ts, beam_width)
+            # Finalize valid hypotheses
+            proposals.extend(_finalize_hypotheses(hyps, Ps, Rs, Ts, min_views, reproj_gate_px, iref))
+            
+        # Global conflict resolution
     return _select_matches(proposals, N)

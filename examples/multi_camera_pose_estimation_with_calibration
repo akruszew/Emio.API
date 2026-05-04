@@ -1,15 +1,23 @@
 #!/usr/bin/env -S uv run --script
 
+"""Multi-camera pose estimation with calibration for Emio robots.
+
+This script demonstrates how to use multiple Emio cameras for 3D pose estimation
+of tracked markers. It performs camera calibration using ArUco markers, then
+runs real-time triangulation and tracking of 3D points from multiple camera views.
+
+The script uses threading for concurrent camera updates and visualization.
+"""
+
 import time
 import logging
 import os
 import sys
 
-
 import threading
 import cv2
 from numpy import ma
-sys.path.append(os.path.dirname(os.path.realpath(__file__))+'/..')
+sys.path.append(os.path.dirname(os.path.realpath(__file__)) + '/..')
 from emioapi import EmioCamera
 from emioapi._logging_config import logger
 import numpy as np
@@ -17,12 +25,22 @@ import triangulation
 
 import tracking
     
-def calibrate(camera: EmioCamera, marker_position_dic: dict[int, np.ndarray],marker_size=70):
-    # ArUco marker detection setup
+def calibrate(camera: EmioCamera, marker_position_dic: dict[int, np.ndarray], marker_size=70):
+    """Calibrate a single camera using ArUco markers.
+
+    Detects ArUco markers in the camera frame and solves for the camera's pose
+    relative to the marker coordinate system. Updates the camera's position
+    estimator with the computed rotation and translation.
+
+    Args:
+        camera: The EmioCamera instance to calibrate.
+        marker_position_dic: Dictionary mapping marker IDs to their 3D positions.
+        marker_size: Size of the ArUco markers in mm (default: 70).
+    """
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_ARUCO_ORIGINAL)
     parameters = cv2.aruco.DetectorParameters()
     detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
-    NUMBER_OF_FRAMES_TO_CAPTURE = 20
+    NUMBER_OF_FRAMES_TO_WAIT = 30
 
     intrinsics = camera._camera.intr    
     camera_matrix = np.array([
@@ -39,9 +57,11 @@ def calibrate(camera: EmioCamera, marker_position_dic: dict[int, np.ndarray],mar
                 [-marker_size/2, -marker_size/2, 0]
             ], dtype=np.float32)
     
-    for i in range(NUMBER_OF_FRAMES_TO_CAPTURE): # wait the auto exposure to adjust
-        ret, color_frame, depth_frame, depth_rsframe = camera._camera.get_frame()
-        
+
+    
+    # for i in range(NUMBER_OF_FRAMES_TO_WAIT):  # Wait for auto exposure to adjust
+    _, color_frame,_,_ = camera._camera.get_frame()
+
     gray = cv2.cvtColor(color_frame, cv2.COLOR_BGR2GRAY)
     _,thresh_image = cv2.threshold(gray,80,255,cv2.THRESH_TOZERO)
     
@@ -66,6 +86,7 @@ def calibrate(camera: EmioCamera, marker_position_dic: dict[int, np.ndarray],mar
             obj_points = np.vstack([obj_points, marker_points + marker_position])
             obj_corners = np.vstack([obj_corners, [corners[i][0][j] for j in range(4)]])
             logger.info(f"Camera {camera.camera_serial} detected marker {id} at position {marker_position}.")
+            color_frame = cv2.aruco.drawDetectedMarkers(color_frame, [corners[i]], ids[i])
 
         
     if len(obj_points) > 0:
@@ -78,9 +99,9 @@ def calibrate(camera: EmioCamera, marker_position_dic: dict[int, np.ndarray],mar
 
     if success and rvec is not None and tvec is not None:
         rotation_matrix, _ = cv2.Rodrigues(rvec)
-        # location of the camera in the marker reference frame is given by -R^T * tvec
+        # Location of the camera in the marker reference frame is given by -R^T * tvec
         camera_position = -rotation_matrix.T @ tvec.flatten()
-        # camera orientation in the marker reference frame is given by R^T
+        # Camera orientation in the marker reference frame is given by R^T
         camera_orientation = rotation_matrix.T
 
 
@@ -88,10 +109,15 @@ def calibrate(camera: EmioCamera, marker_position_dic: dict[int, np.ndarray],mar
         camera._camera.position_estimator.t = camera_position
         logger.debug(f"Camera {camera.camera_serial} position estimator set with R:\n{rotation_matrix.T}\nt:\n{camera_position}")
     logger.info(f"Camera {camera.camera_serial} calibrated.")
+    return color_frame.copy()
 
 
 def create_marker_position_dictionary():
-    # Create a dictionary to store the positions of the markers
+    """Create a dictionary of marker positions for calibration.
+
+    Returns:
+        dict: Mapping of marker IDs to their 3D positions as numpy arrays.
+    """
     marker_positions = {
         672: np.array([0, 0, 0]),  # Marker ID 672 at the origin
         42: np.array([84, 0, 0]),  # Marker ID 42 at (84mm, 0, 0)
@@ -100,7 +126,15 @@ def create_marker_position_dictionary():
     return marker_positions
 
 
-def run_camera(camera: EmioCamera,synchronization_barrier: threading.Barrier):
+def run_camera(camera: EmioCamera, synchronization_barrier: threading.Barrier):
+    """Run camera update loop in a separate thread.
+
+    Continuously updates the camera frame and trackers, synchronizing with other threads.
+
+    Args:
+        camera: The EmioCamera instance to run.
+        synchronization_barrier: Threading barrier for synchronization.
+    """
     while camera.is_running:
         camera.update()  # update the camera frame and trackers
             # Wait for all threads to reach this point before proceeding
@@ -108,51 +142,72 @@ def run_camera(camera: EmioCamera,synchronization_barrier: threading.Barrier):
 
 
 def main(cameras: list[EmioCamera]):
-    logger.info("Calibrating cameras...")
+    """Main function to run the multi-camera pose estimation pipeline.
+
+    Calibrates cameras, starts tracking threads, and performs real-time triangulation and visualization.
+
+    Args:
+        cameras: List of EmioCamera instances to use.
+    """
+    logger.info("Starting camera calibration...")
     calibration_threads = []
     start_time = time.time()
     marker_position_dic = create_marker_position_dictionary()
-    
-    for camera in cameras:
-        calibration_thread = threading.Thread(target=calibrate, args=(camera,marker_position_dic))
-        calibration_threads.append(calibration_thread)
-        calibration_thread.start()
-        #calibrate(camera,marker_position_dic)
-
-
-    for calibration_thread in calibration_threads:
-        calibration_thread.join()
+        
+    while cv2.waitKey(1) < 0:  # Wait for calibration to complete (or timeout)
+        calibration_images = None
+        for camera in cameras:
+            image = calibrate(camera, marker_position_dic)
+            if calibration_images is None:
+                calibration_images = image
+            else:
+                calibration_images = np.hstack((calibration_images, image))
+            
+        calibration_images = cv2.resize(calibration_images, (0, 0), fx=0.5, fy=0.5)
+        cv2.putText(calibration_images, "Calibrating cameras... Press any key to continue.", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        cv2.imshow(f"Camera calibration", calibration_images)
+        
 
     logger.info(f"Calibration completed in {time.time() - start_time:.2f} seconds.")
-    input("Press Enter to start pose estimation...")
-
-
-    synchronization_barrier = threading.Barrier(len(cameras)+1)
+    
+    frame_synchronization_barrier = threading.Barrier(len(cameras)+1)
     run_camera_threads = []
     for camera in cameras:
-        thread = threading.Thread(target=run_camera, args=(camera, synchronization_barrier))
+        thread = threading.Thread(target=run_camera, args=(camera, frame_synchronization_barrier))
         thread.daemon = True  # Set the thread as a daemon thread
         run_camera_threads.append(thread)
         thread.start()
 
-    Rs, Ts, Ks = build_camera_matrices(cameras)
 
+    Rs, Ts, Ks = build_camera_matrices(cameras)
     tracker = tracking.MultiMarkerTracker3D(
-    dist_gate=15,    # à tuner selon la vitesse max et dt=1/30
-    max_misses=5,      # tolère ~5 frames d'occlusion
-    q=1e-2,
-    r=1e-4
+        dist_gate=150,    # Tune according to max speed and dt=1/30
+        max_misses=5,      # Tolerates ~5 frames of occlusion
+        q=1e-2,
+        r=1e-4
     )
     t = 0.0
-    dt = 0.1
+    dt = 1.0 / 30.0  # Assuming cameras run at 30 FPS, adjust as needed
 
     while cameras[0].is_running:  # Assuming all cameras have the same running state
         try:
+
+            frame_synchronization_barrier.wait()  # Wait for all camera threads to update before proceeding
+            #matches = marker_position_estimation(cameras, Ks, Rs, Ts)
+            current_time = time.time()
+            # Collect detections from all cameras
+            detections = [[] for _ in range(len(cameras))]  # List of lists of (u,v) in pixels for each camera
+            for id_camera in range(len(cameras)):
+                camera = cameras[id_camera]
+                for tracker_pos in camera._trackers_pos_camera_image:
+                    detections[id_camera].append((tracker_pos[0],tracker_pos[1]))    
             
-            # for camera in cameras:
-            #     camera.update()  # update the camera frame and trackers
-            synchronization_barrier.wait()  # Wait for all camera threads to update before proceeding
-            matches = marker_position_estimation(cameras, Ks, Rs, Ts)
+            matches = triangulation.match_ncams_one_frame(detections, Ks, Rs, Ts,
+                            ref=0,
+                            epi_gate_px=30.0,
+                            reproj_gate_px=30.0,
+                            beam_width=50,
+                            min_views=2)
 
             X_meas = []  # list of 3D points measured at this frame
             if matches is None:
@@ -162,15 +217,16 @@ def main(cameras: list[EmioCamera]):
                 Xk = m["X"]
                 Rms = m["rms"]
 
-                if Rms < 3.0:  # gate reprojection
+                if Rms < 3.0:  # Gate reprojection error
                     X_meas.append(Xk)
 
             tracks = tracker.update(X_meas, t)
             t += dt
-
-            visualize_matches(cameras, matches, Ks, Rs, Ts)
+            logger.info(f"Frame time: {time.time() - current_time:.4f} seconds, Tracks: {len(tracks)}")
+            #visualize_matches(cameras, matches, Ks, Rs, Ts)
             visualize_tracks(cameras, tracks, Ks, Rs, Ts)
             cv2.waitKey(1)
+
             time.sleep(dt) # to run at ~1/dt Hz, adjust as needed
         except KeyboardInterrupt:
             logger.info("Keyboard interrupt received.")
@@ -179,12 +235,20 @@ def main(cameras: list[EmioCamera]):
             logger.exception(f"Error during communication: {e}")
             break
 
-    synchronization_barrier.abort()
+    frame_synchronization_barrier.abort()
 
 def build_camera_matrices(cameras):
-    Rs = []
+    """Build camera matrices from calibrated cameras.
+
+    Args:
+        cameras: List of calibrated EmioCamera instances.
+
+    Returns:
+        tuple: (Rs, Ts, Ks) where Rs are rotation matrices, Ts are translation vectors, Ks are intrinsic matrices.
+    """
     Ts = []
     Ks = []
+    Rs = []
     for id_camera in range(len(cameras)):
         camera = cameras[id_camera]
                 # Always add camera parameters, even if no trackers
@@ -204,6 +268,20 @@ def build_camera_matrices(cameras):
     
 
 def marker_position_estimation(cameras, Ks, Rs, Ts):
+    """Perform marker position estimation using triangulation.
+
+    This function is currently not used in the main loop but demonstrates
+    alternative triangulation methods.
+
+    Args:
+        cameras: List of EmioCamera instances.
+        Ks: List of intrinsic matrices.
+        Rs: List of rotation matrices.
+        Ts: List of translation vectors.
+
+    Returns:
+        list: List of matched 3D points.
+    """
     current_time = time.time()
     logger.info(f"Camera update time: {time.time() - current_time:.4f} seconds")
 
@@ -250,12 +328,12 @@ def marker_position_estimation(cameras, Ks, Rs, Ts):
         logger.info(f"QP Point to rays error: {np.round(estimation_errors, decimals=2)}") 
 
 
-            # detections[c] = list of (u,v) in pixels for camera c at current frame
+    # Detections[c] = list of (u,v) in pixels for camera c at current frame
     current_time = time.time()
     matches = triangulation.match_ncams_one_frame(detections, Ks, Rs, Ts,
                                ref=0,
-                               epi_gate_px=20.0,
-                               reproj_gate_px=20.0,
+                               epi_gate_px=200.0,
+                               reproj_gate_px=200.0,
                                beam_width=50,
                                min_views=2)
     logger.info(f"Matches: {len(matches)}")
@@ -265,38 +343,68 @@ def marker_position_estimation(cameras, Ks, Rs, Ts):
     return matches
 
 def visualize_matches(cameras, matches, Ks, Rs, Ts):
+    """Visualize matched 3D points on camera frames.
+
+    Args:
+        cameras: List of EmioCamera instances.
+        matches: List of matched 3D points from triangulation.
+        Ks: List of intrinsic matrices.
+        Rs: List of rotation matrices.
+        Ts: List of translation vectors.
+    """
     for id_camera in range(len(cameras)):
         camera = cameras[id_camera]
         image = camera._camera.frame.copy()
         for i in range(len(matches)):
             m = matches[i]
-            logger.info(f"Match {i}: views: {m['views']}, rms: {m['rms']}, idx_map: {m['idx']}, X: {m['X']}")
-            # find in m['idx'] the index of the view corresponding to id_camera
+            logger.info(f"\nMatch {i}: views: {m['views']}, rms: {m['rms']}, idx_map: {m['idx']}, X: {np.round(m['X'], decimals=2)}")
+            # Find in m['idx'] the index of the view corresponding to id_camera
             for idx_view, view in enumerate(m["idx"]):
-                if view == 1:
+                if view != 0:
                     Ps = triangulation.make_projection(Ks[id_camera], Rs[id_camera], Ts[id_camera])
                     x = triangulation.project_point(Ps, m["X"])
                     u_proj = int(x[0]) 
                     v_proj = int(x[1]) 
                     cv2.circle(image, (u_proj, v_proj), 20, (255, 0, 0), 4)
                     cv2.putText(image, f"ID {i}", (u_proj+20, v_proj), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-
+        image = cv2.resize(image, (0, 0), fx=0.75, fy=0.75)
         cv2.imshow(f"Camera {camera.camera_serial} matches", image)
 
     
 def visualize_tracks(cameras, tracks, Ks, Rs, Ts):
+    """Visualize tracked 3D points on camera frames.
+
+    Args:
+        cameras: List of EmioCamera instances.
+        tracks: List of track dictionaries from the tracker.
+        Ks: List of intrinsic matrices.
+        Rs: List of rotation matrices.
+        Ts: List of translation vectors.
+    """
+    for track in tracks:
+        
+        logger.info(f"Id {track['id']} Track position: {np.round(track['pos'], decimals=2)}")
+
+    final_image = None
     for id_camera in range(len(cameras)):
         camera = cameras[id_camera]
         image = camera._camera.frame.copy()
         for track in tracks:
-            logger.info(f"Track: {track}")
             Ps = triangulation.make_projection(Ks[id_camera], Rs[id_camera], Ts[id_camera])
             x = triangulation.project_point(Ps, track['pos'])
             u_proj = int(x[0]) 
             v_proj = int(x[1]) 
             cv2.circle(image, (u_proj, v_proj), 10, (0, 255, 0), 2)
             cv2.putText(image, f"ID {track['id']}", (u_proj+10, v_proj+10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        cv2.imshow(f"Camera {camera.camera_serial} tracks", image)
+        image = cv2.resize(image, (0, 0), fx=0.5, fy=0.5)
+        if final_image is None:
+            final_image = image
+        else:
+            final_image = np.hstack((final_image, image))
+        #cv2.imshow(f"Camera {camera.camera_serial} tracks", image)
+
+    if final_image is not None:
+        cv2.imshow("Final Image", final_image)
 
 
 if __name__ == "__main__":
@@ -316,9 +424,9 @@ if __name__ == "__main__":
         for camera in cameras:
             camera._camera.height = 720
             camera._camera.width = 1280
-            camera.fps = 30 # sets the fps to 30. Default is 60 and can only be one of 30. 60 or 90fps
-            camera.depth_max = 600 # sets the maximum depth to 600mm. Default is 430mm
-            camera.depth_min = 0 # sets the minimum depth to 0mm. Default is 2mm
+            camera.fps = 30  # Sets the fps to 30. Default is 60 and can only be one of 30, 60 or 90 fps
+            camera.depth_max = 600  # Sets the maximum depth to 600mm. Default is 430mm
+            camera.depth_min = 0  # Sets the minimum depth to 0mm. Default is 2mm
             camera.open(camera.camera_serial)
             logger.info(f"Emio camera {camera.camera_serial} opened.")
         
