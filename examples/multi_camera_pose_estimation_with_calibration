@@ -8,12 +8,14 @@ import sys
 
 import threading
 import cv2
+from numpy import ma
 sys.path.append(os.path.dirname(os.path.realpath(__file__))+'/..')
 from emioapi import EmioCamera
 from emioapi._logging_config import logger
 import numpy as np
 import triangulation
 
+import tracking
     
 def calibrate(camera: EmioCamera, marker_position_dic: dict[int, np.ndarray]):
     # ArUco marker detection setup
@@ -42,7 +44,7 @@ def calibrate(camera: EmioCamera, marker_position_dic: dict[int, np.ndarray]):
         ret, color_frame, depth_frame, depth_rsframe = camera._camera.get_frame()
         
     gray = cv2.cvtColor(color_frame, cv2.COLOR_BGR2GRAY)
-    _,thresh_image = cv2.threshold(gray,95,255,cv2.THRESH_TOZERO)
+    _,thresh_image = cv2.threshold(gray,80,255,cv2.THRESH_TOZERO)
     
     # Detect ArUco markers
     corners, ids, rejected = detector.detectMarkers(thresh_image)
@@ -122,6 +124,10 @@ def main(cameras: list[EmioCamera]):
     for calibration_thread in calibration_threads:
         calibration_thread.join()
 
+    logger.info(f"Calibration completed in {time.time() - start_time:.2f} seconds.")
+    input("Press Enter to start pose estimation...")
+
+
     synchronization_barrier = threading.Barrier(len(cameras)+1)
     run_camera_threads = []
     for camera in cameras:
@@ -130,18 +136,35 @@ def main(cameras: list[EmioCamera]):
         run_camera_threads.append(thread)
         thread.start()
 
-
-    logger.info(f"Calibration completed in {time.time() - start_time:.2f} seconds.")
-    input("Press Enter to start pose estimation...")
+    tracker = tracking.MultiMarkerTracker3D(
+    dist_gate=0.15,    # à tuner selon la vitesse max et dt=1/30
+    max_misses=5,      # tolère ~5 frames d'occlusion
+    q=1e-2,
+    r=1e-4
+    )
+    t = 0.0
+    dt = 0.1
     while cameras[0].is_running:  # Assuming all cameras have the same running state
         try:
             
             # for camera in cameras:
             #     camera.update()  # update the camera frame and trackers
             synchronization_barrier.wait()  # Wait for all camera threads to update before proceeding
+            matches = marker_position_estimation(cameras)
 
-            marker_position_estimation(cameras)
+            X_meas = []  # list of 3D points measured at this frame
+            if matches is None:
+                continue
+            
+            for m in matches:
+                Xk = m["X"]
+                Rms = m["rms"]
 
+                if Rms < 3.0:  # gate reprojection
+                    X_meas.append(Xk)
+
+            tracks = tracker.update(X_meas, t)
+            print(tracks)
             time.sleep(0.1)
         except KeyboardInterrupt:
             logger.info("Keyboard interrupt received.")
@@ -206,18 +229,18 @@ def marker_position_estimation(cameras):
         logger.info(f"Reprojection error with LM refinement: {np.round(np.array(estimation_errors_nv['rms_reproj_px']), decimals=2)} pixels")
     current_time = time.time()
     estimation, estimation_errors = triangulation.point_closest_to_rays(rays)
-    logger.info(f"Triangulation time: {time.time() - current_time:.4f} seconds")
+    logger.info(f"QP Triangulation time: {time.time() - current_time:.4f} seconds")
     if estimation is not None:
-        logger.info(f"Triangulated position: {np.round(estimation.T, decimals=2)}")
-        logger.info(f"Errors: {np.round(estimation_errors, decimals=2)}") 
+        logger.info(f"QP Triangulated position: {np.round(estimation.T, decimals=2)}")
+        logger.info(f"QP Point to rays error: {np.round(estimation_errors, decimals=2)}") 
 
 
             # detections[c] = list of (u,v) in pixels for camera c at current frame
     current_time = time.time()
     matches = triangulation.match_ncams_one_frame(detections, Ks, Rs, Ts,
                                ref=0,
-                               epi_gate_px=5.0,
-                               reproj_gate_px=5.0,
+                               epi_gate_px=20.0,
+                               reproj_gate_px=20.0,
                                beam_width=50,
                                min_views=2)
     print(f"Matches: {len(matches)}")
@@ -229,6 +252,26 @@ def marker_position_estimation(cameras):
         print("views:", m["views"], "rms:", m["rms"], "idx_map:", m["idx"], "X:", m["X"])
     logger.info(f"Matching time: {time.time() - current_time:.4f} seconds")
 
+    visualize_matches(cameras, matches, Ks, Rs, Ts)
+    return matches
+
+def visualize_matches(cameras, matches, Ks, Rs, Ts):
+    for id_camera in range(len(cameras)):
+        camera = cameras[id_camera]
+        image = camera._camera.frame.copy()
+        for m in matches:
+            # find in m['idx'] the index of the view corresponding to id_camera
+            for idx_view, view in enumerate(m["idx"]):
+                if view == 1:
+                    Ps = triangulation.make_projection(Ks[id_camera], Rs[id_camera], Ts[id_camera])
+                    x = triangulation.project_point(Ps, m["X"])
+                    u_proj = int(x[0]) 
+                    v_proj = int(x[1]) 
+                    cv2.circle(image, (u_proj, v_proj), 20, (255, 0, 0), 4)
+
+        cv2.imshow(f"Camera {camera.camera_serial} matches", image)
+    cv2.waitKey(1)
+    
 
 
 if __name__ == "__main__":

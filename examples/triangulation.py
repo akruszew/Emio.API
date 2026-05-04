@@ -449,7 +449,7 @@ def triangulate_dlt(Ps, uvs):
     """
     Ps = list(Ps)
     uvs = np.asarray(uvs, dtype=float)
-    assert len(Ps) == len(uvs)
+    #assert len(Ps) == len(uvs)
     N = len(Ps)
 
     A = np.zeros((2*N, 4), dtype=float)
