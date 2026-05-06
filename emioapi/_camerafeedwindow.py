@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import ttk
+from turtle import width
 
 import cv2 as cv
 from PIL import ImageTk, Image
@@ -13,7 +14,7 @@ from PIL import ImageTk, Image
 """	
 class CameraFeedWindow():
     windowCount = 0
-    def __init__(self, rootWindow, name=f"Camera Feed Window", trackbarParams={}, on_change=None, *args, **kwargs):
+    def __init__(self, rootWindow, name=f"Camera Feed Window", trackbarParams={}, on_change=None,imageSize=(640, 480), *args, **kwargs):
         super().__init__(*args, **kwargs)
         CameraFeedWindow.windowCount += 1
         self.rootWindow = rootWindow
@@ -25,8 +26,11 @@ class CameraFeedWindow():
         self.window.title(self.name)
         # self.window.geometry("640x480")
         self.window.resizable(False, False)
-        self.canvas = tk.Canvas(self.window, width=640, height=480)
-        self.canvasImage = self.canvas.create_image(320, 240, anchor="center")
+        self.width = imageSize[0]
+        self.height = imageSize[1]
+        self.canvas = tk.Canvas(self.window, width=self.width, height=self.height)
+        
+        self.canvasImage = self.canvas.create_image(self.width//2, self.height//2, anchor="center")
         self.canvas.pack()
 
         self.default_param = trackbarParams.copy()
@@ -61,7 +65,7 @@ class CameraFeedWindow():
     def set_frame(self, frame):
         # Convert the frame to a format that can be displayed in the Tkinter window
         frame = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
-        frame = cv.resize(frame, (640, 480))
+        frame = cv.resize(frame, (self.width, self.height))
         if self.rootWindow and self.window and self.window.winfo_exists():
             self.image = ImageTk.PhotoImage(image=Image.fromarray(frame))
             self.canvas.imgref = self.image

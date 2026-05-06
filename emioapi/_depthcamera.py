@@ -298,6 +298,22 @@ class DepthCamera:
         color_image = np.asanyarray(color_frame.get_data())
         return True, color_image, depth_image, depth_frame
 
+    
+    def build_camera_intrinsics_matrix(self) -> np.ndarray:
+        """
+        Build the camera intrinsics matrix from the intrinsic parameters of the camera.
+
+        Return:   intrinsics: object
+            The camera intrinsics matrix See https://intelrealsense.github.io/librealsense/python_docs/_generated/pyrealsense2.intrinsics.html
+        """
+        fx = self.intr.fx
+        fy = self.intr.fy
+        ppx = self.intr.ppx
+        ppy = self.intr.ppy
+        M = np.array([[fx, 0, ppx],
+                    [0, fy, ppy],
+                    [0, 0, 1]])
+        return M
 
     def update(self):
         ret, self.frame, self.depth_frame, depth_rsframe = self.get_frame()
@@ -338,20 +354,20 @@ class DepthCamera:
                 for i, a in enumerate(areas):
                     if a > self.parameter['area']:
                         x, y = compute_contour_center(contours[i])
-                        marker_mask = np.zeros_like(mask)
                         self.trackers_pos_image.append([x,y])
                         depth = compute_median_depth(contours[i], self.depth_frame) if self.depth_frame[y, x] == 0 else self.depth_frame[y, x]
                         worldx, worldy, worldz = self.position_estimator.camera_image_to_simulation(x, y, depth)
                         self.trackers_pos.append([worldx, worldy, worldz])
 
-                        cv.drawContours(marker_mask, [contours[i]], -1, color=255, thickness=-1)
-                        for frame in [self.hsvFrame, self.frame]:
-                            cv.circle(frame, (x, y), 2, color=255, thickness=-1)
-                            cv.putText(frame, f"{i} ({x}, {y}, {depth})", (x, y), cv.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-                            cv.putText(frame, f"{i} ({worldx:.2f}, {worldy:.2f}, {worldz:.2f})", (x, y + 15), cv.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-
+                          
                         if self.show_video_feed:
-                            cv.drawContours(self.frame, [contours[i]], -1, (255, 255, 0), 3)
+                            for frame in [self.hsvFrame, self.frame]:
+                                cv.circle(frame, (x, y), 2, color=255, thickness=-1)
+                                cv.putText(frame, f"{i} ({x}, {y}, {depth})", (x, y), cv.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+                                cv.putText(frame, f"{i} ({worldx:.2f}, {worldy:.2f}, {worldz:.2f})", (x, y + 15), cv.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+
+                            
+                                cv.drawContours(self.frame, [contours[i]], -1, (255, 255, 0), 3)
 
         if self.compute_point_cloud:
             points = self.pc.calculate(depth_rsframe)
