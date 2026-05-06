@@ -48,12 +48,7 @@ def calibrate(camera: EmioCamera, marker_position_dic: dict[int, np.ndarray],gam
     detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
     NUMBER_OF_FRAMES_TO_WAIT = 30
 
-    intrinsics = camera._camera.intr    
-    camera_matrix = np.array([
-        [intrinsics.fx, 0, intrinsics.ppx],
-        [0, intrinsics.fy, intrinsics.ppy],
-        [0, 0, 1]
-    ], dtype=np.float32)
+
     dist_coeffs = np.zeros((4, 1))
     camera_matrix = camera._camera.build_camera_intrinsics_matrix()
     marker_points = np.array([
