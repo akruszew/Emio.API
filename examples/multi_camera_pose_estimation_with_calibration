@@ -25,40 +25,36 @@ import emioapi._triangulation as triangulation
 import emioapi._tracking as tracking
 import emioapi._camerafeedwindow as camerafeedwindow
 import tkinter as tk
-from tkinter import ttk
 
-rootWindow = tk.Tk()
-#rootWindow.resizable(False, False)
-rootWindow.title("Camera Feed")
 
 def DetectArucoCorners(frame:np.ndarray):
     
     return frame
 
-def calibrate(camera: EmioCamera, marker_corner_position_dic: dict[int, np.ndarray],gamma=80, threshold=80):
-    """Calibrate a single camera using ArUco markers.
+def estimate_transform(camera: EmioCamera, marker_corner_position_dic: dict[int, np.ndarray],gamma=80, threshold=80)-> tuple[float, np.ndarray, np.ndarray]:
+    """Estimate the transform of a single camera using ArUco markers.
 
     Detects ArUco markers in the camera frame and solves for the camera's pose
-    relative to the marker coordinate system. Updates the camera's position
-    estimator with the computed rotation and translation.
+    relative to the marker coordinate system. Updates the camera's transform
+    with the computed rotation and translation.
 
     Args:
         camera: The EmioCamera instance to calibrate.
         marker_position_dic: Dictionary mapping marker IDs to their 3D positions.
         threshold: Threshold value for image binarization (default: 80).
-        marker_size: Size of the ArUco markers in mm (default: 70).
+        gamma: 100/Gamma correction value for image preprocessing (default: 80).
+
+    returns:
+        tuple: (max_error, color_frame, thresh_image) where max_error is the maximum reprojection error in pixels,
+               color_frame is the original camera frame with detected markers drawn, and thresh_image is the preprocessed image used for detection.
     """
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_ARUCO_ORIGINAL)
     parameters = cv2.aruco.DetectorParameters()
     detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
-    NUMBER_OF_FRAMES_TO_WAIT = 30
-
-
+    
     dist_coeffs = np.zeros((4, 1))
     camera_matrix = camera._camera.build_camera_intrinsics_matrix()
     
-    
-    # for i in range(NUMBER_OF_FRAMES_TO_WAIT):  # Wait for auto exposure to adjust
     _, color_frame,_,_ = camera._camera.get_frame()
 
     gray = cv2.cvtColor(color_frame, cv2.COLOR_BGR2GRAY)
@@ -69,7 +65,7 @@ def calibrate(camera: EmioCamera, marker_corner_position_dic: dict[int, np.ndarr
     corners, ids, rejected = detector.detectMarkers(thresh_image)
     if ids is None or len(ids) == 0:
         logger.warning(f"No ArUco markers detected for camera {camera.camera_serial}. Calibration failed.")
-        return color_frame.copy(), thresh_image.copy()
+        return np.inf,color_frame.copy(), thresh_image.copy()
 
     for i in range(len(ids)):
         id = int(ids[i][0])
@@ -112,8 +108,23 @@ def calibrate(camera: EmioCamera, marker_corner_position_dic: dict[int, np.ndarr
         camera._camera.position_estimator.R = camera_orientation
         camera._camera.position_estimator.t = camera_position
         logger.debug(f"Camera {camera.camera_serial} position estimator set with R:\n{rotation_matrix.T}\nt:\n{camera_position}")
-    logger.info(f"Camera {camera.camera_serial} calibrated.")
-    return color_frame.copy(), thresh_image.copy()
+    else:
+        logger.warning(f"Camera {camera.camera_serial} pose estimation failed. solvePnP did not succeed.")
+
+    # verify that the reprojection of the corners is correct
+    max_error = np.inf
+    if success and rvec is not None and tvec is not None:
+        projected_points, _ = cv2.projectPoints(obj_points, rvec, tvec, camera_matrix, dist_coeffs)
+        for i in range(len(obj_points)):
+            u_proj = int(projected_points[i][0][0]) 
+            v_proj = int(projected_points[i][0][1]) 
+            cv2.circle(color_frame, (u_proj, v_proj), 5, (0, 255, 0), -1)
+        error = np.linalg.norm(projected_points.squeeze() - obj_corners, axis=1)
+        max_error = np.max(error)
+    logger.info(f"Camera {camera.camera_serial} reprojection error: {np.round(error, decimals=2)} pixels")
+            
+    
+    return max_error, color_frame.copy(), thresh_image.copy()
 
 
 def create_marker_center_and_rotation_dictionaries():
@@ -122,15 +133,16 @@ def create_marker_center_and_rotation_dictionaries():
         42:  np.array([84, 0, 0]),  # Marker ID 42 at (84mm, 0, 0)
         # Add more markers here if needed
     }
+    from scipy.spatial.transform import Rotation as R
     R_xy_plane = np.eye(3)
     marker_rotation = { 
         672: R_xy_plane,
-        42:  R_xy_plane
+        42:  R.from_euler('z', 90, degrees=True).as_matrix() @ R_xy_plane,  # Rotate marker 42 by 90 degrees around Z-axis
     }
     return marker_centers, marker_rotation
 
 
-def run_camera(camera: EmioCamera, synchronization_barrier: threading.Barrier):
+def camera_update_loop(camera: EmioCamera, synchronization_barrier: threading.Barrier):
     """Run camera update loop in a separate thread.
 
     Continuously updates the camera frame and trackers, synchronizing with other threads.
@@ -152,93 +164,73 @@ def main(cameras: list[EmioCamera]):
     Args:
         cameras: List of EmioCamera instances to use.
     """
-    logger.info("Starting camera calibration...")
-    calibration_threads = []
+    MAX_ERROR_THRESHOLD = 5.0  # Maximum acceptable reprojection error in pixels for calibration
     start_time = time.time()
-    
-    calibration_parameters = dict()
-    camera_feed_calibration = camerafeedwindow.CameraFeedWindow(rootWindow, name="Camera Calibration", trackbarParams=calibration_parameters,imageSize=(640*len(cameras), 480*2))
-    camera_feed_calibration.window.resizable(True, True)
 
-    for camera in cameras:
-        calibration_parameters['gamma '+camera.camera_serial] = 1.0
-        ttk.Label(camera_feed_calibration.window, text=f"Camera {camera.camera_serial}").pack()
-        scale = ttk.Scale(camera_feed_calibration.window, 
-                  from_=0.1, to=4, 
-                  orient='horizontal',
-                  command=lambda value, cam=camera: calibration_parameters.update({f'gamma {cam.camera_serial}': (float(value))})
-                )
-        scale.set(calibration_parameters['gamma '+camera.camera_serial])
-        scale.pack(fill="x", padx=5)
-        calibration_parameters['threshold '+camera.camera_serial] = 80
-        ttk.Label(camera_feed_calibration.window, text=f"Camera {camera.camera_serial} Threshold").pack()
-        scale = ttk.Scale(camera_feed_calibration.window, 
-                  from_=0, to=255, 
-                  orient='horizontal',
-                  command=lambda value, cam=camera: calibration_parameters.update({f'threshold {cam.camera_serial}': int(float(value))})
-                  )
-        scale.set(calibration_parameters['threshold '+camera.camera_serial])
-        scale.pack(fill="x", padx=5)
+    error = calibrate_cameras(cameras) # Calibrate cameras and get the maximum reprojection error across all cameras, will update the camera transforms
+    if error > MAX_ERROR_THRESHOLD:
+        logger.warning(f"Calibration error {error:.2f} exceeds threshold of {MAX_ERROR_THRESHOLD}. Pose estimation may be inaccurate.")
+        input("Press Enter to continue anyway, or Ctrl-C to exit.")
     
-    
-    
-    validated = False
-    def on_validate_calibration():
-        nonlocal validated
-        validated = True
-    ttk.Button(camera_feed_calibration.window, text="Validate calibration", command=on_validate_calibration
-               ).pack(side=tk.BOTTOM, padx=5, pady=5)
-    
-    marker_size = 70
-    marker_position_dic, marker_rotation_dic = create_marker_center_and_rotation_dictionaries()
-    arcuco_corner_3D_position_dictionnay = create_aruco_corners_3D_positions_dictionaty(marker_position_dic,marker_rotation_dic,marker_size)
-
-    while not validated:  # Wait for calibration to complete (or timeout)
-        calibration_images = None
-        for camera in cameras:
-            color_image,thresh_image = calibrate(camera, arcuco_corner_3D_position_dictionnay,gamma=calibration_parameters['gamma '+camera.camera_serial], threshold=calibration_parameters['threshold '+camera.camera_serial])
-            if thresh_image is None:
-                continue
-            else:
-                image = np.vstack((color_image, cv2.cvtColor(thresh_image, cv2.COLOR_GRAY2BGR)))
-                cv2.putText(image, f"Camera {camera.camera_serial}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            if calibration_images is None:
-                calibration_images = image
-            else:
-                calibration_images = np.hstack((calibration_images, image))
-            
-        calibration_images = cv2.resize(calibration_images, (0, 0), fx=0.25, fy=0.25)
-        #cv2.imshow(f"Camera calibration", calibration_images)
-        camera_feed_calibration.set_frame( calibration_images)
-        rootWindow.update()
-    camera_feed_calibration.closed()
-        
 
     logger.info(f"Calibration completed in {time.time() - start_time:.2f} seconds.")
     
-    frame_synchronization_barrier = threading.Barrier(len(cameras)+1)
-    run_camera_threads = []
-    for camera in cameras:
-        thread = threading.Thread(target=run_camera, args=(camera, frame_synchronization_barrier))
-        thread.daemon = True  # Set the thread as a daemon thread
-        run_camera_threads.append(thread)
-        thread.start()
 
 
-    Rs, Ts, Ks = build_camera_matrices(cameras)
     tracker = tracking.MultiMarkerTracker3D(
         dist_gate=150,    # Tune according to max speed and dt=1/30
         max_misses=5,      # Tolerates ~5 frames of occlusion
         q=1e-0,
         r=1e-6
     )
+
+    def log_tracker(tracker=tracker):
+        while True:
+            time.sleep(0.1)
+            s="\n"
+            for track in tracker.tracks:
+                s += f"ID {track.id}: pos {np.round(track.pos, decimals=2)}, misses {track.misses} | "
+            logger.info(s)
+            
+    # Start the logger thread
+    logger_thread = threading.Thread(target=log_tracker, args=(tracker,))
+    logger_thread.daemon = True
+    logger_thread.start()
+
+    run_tracking_system(cameras,tracker)
+
+    
+
+
+def run_tracking_system(cameras,tracker):
+    '''
+    Run the main tracking system loop. 
+    This function starts the camera update threads, then continuously performs triangulation and tracking, visualizing the results.
+        
+        Args:
+            cameras: List of EmioCamera instances to use.
+            tracker: MultiMarkerTracker3D instance to use for tracking.
+
+    '''
+    frame_synchronization_barrier = threading.Barrier(len(cameras)+1)
+    run_camera_threads = []
+    for camera in cameras:
+        thread = threading.Thread(target=camera_update_loop, args=(camera, frame_synchronization_barrier))
+        thread.daemon = True  # Set the thread as a daemon thread
+        run_camera_threads.append(thread)
+        thread.start()
+
+    Rs, Ts, Ks = build_camera_matrices(cameras)
     
     t = 0.0
     dt = 1.0 / 30.0  # Assuming cameras run at 30 FPS, adjust as needed
 
+    cv2.namedWindow("Tracks", cv2.WINDOW_FREERATIO)
+    cv2.resizeWindow('Tracks', 1200, 800)
+    cv2.createButton("Exit", lambda *args: sys.exit(0), None, cv2.QT_PUSH_BUTTON, 1)
+
     while cameras[0].is_running:  # Assuming all cameras have the same running state
         try:
-
             frame_synchronization_barrier.wait()  # Wait for all camera threads to update before proceeding
             #matches = marker_position_estimation(cameras, Ks, Rs, Ts)
             current_time = time.time()
@@ -247,7 +239,7 @@ def main(cameras: list[EmioCamera]):
             for id_camera in range(len(cameras)):
                 camera = cameras[id_camera]
                 for tracker_pos in camera._trackers_pos_camera_image:
-                    detections[id_camera].append((tracker_pos[0],tracker_pos[1]))    
+                    detections[id_camera].append(tracker_pos)    
             
             matches = triangulation.match_ncams_one_frame(detections, Ks, Rs, Ts,
                             ref=0,
@@ -266,10 +258,10 @@ def main(cameras: list[EmioCamera]):
 
                 if Rms < 3.0:  # Gate reprojection error
                     X_meas.append(Xk)
-
+            
             tracks = tracker.update(X_meas, t)
             t += dt
-            logger.info(f"Frame time: {time.time() - current_time:.4f} seconds, Tracks: {len(tracks)}")
+            logger.debug(f"Frame time: {time.time() - current_time:.4f} seconds, Tracks: {len(tracks)}")
             #visualize_matches(cameras, matches, Ks, Rs, Ts)
             images = visualize_tracks(cameras, tracks, Ks, Rs, Ts)
             concatenated_image = None
@@ -283,7 +275,7 @@ def main(cameras: list[EmioCamera]):
                 cv2.imshow("Tracks", concatenated_image)
 
             cv2.waitKey(1)  # Needed to update OpenCV windows, adjust delay as needed
-            time.sleep(dt) # to run at ~1/dt Hz, adjust as needed
+            
         except KeyboardInterrupt:
             logger.info("Keyboard interrupt received.")
             break
@@ -293,7 +285,85 @@ def main(cameras: list[EmioCamera]):
 
     frame_synchronization_barrier.abort()
 
+def calibrate_cameras(cameras):
+    '''
+    Calibrate the cameras.  
+    This function displays a calibration window with trackbars to adjust gamma and threshold for each camera. 
+    It continuously estimates the camera pose using ArUco markers and updates the camera transforms until the user validates the calibration or closes the window. 
+    It returns the maximum reprojection error across all cameras after calibration.
+
+        Args:
+            cameras: List of EmioCamera instances to calibrate.
+    '''
+    logger.info("Starting camera calibration...")
+    calibration_parameters = dict()
+
+    cv2.namedWindow("Camera calibration", cv2.WINDOW_FREERATIO)
+    cv2.resizeWindow('Camera calibration', 1200, 800)
+    for camera in cameras:
+        calibration_parameters['gamma '+camera.camera_serial] = 1.0
+        cv2.createTrackbar(f"Gamma {camera.camera_serial}", "Camera calibration", 100, 400, lambda value, cam=camera: calibration_parameters.update({f'gamma {cam.camera_serial}': (float(value)/100)}))
+        cv2.setTrackbarPos(f"Gamma {camera.camera_serial}", "Camera calibration", 100)
+        calibration_parameters['threshold '+camera.camera_serial] = 80
+        cv2.createTrackbar(f"Threshold {camera.camera_serial}", "Camera calibration", 80, 255, lambda value, cam=camera: calibration_parameters.update({f'threshold {cam.camera_serial}': int(float(value))}))
+        cv2.setTrackbarPos(f"Threshold {camera.camera_serial}", "Camera calibration", 80)
+       
+    
+    
+    validated = False
+    def on_validate_calibration(*args):
+        nonlocal validated
+        validated = True
+    cv2.createButton("Validate Calibration", on_validate_calibration, None, cv2.QT_PUSH_BUTTON, 1)
+    cv2.displayOverlay("Camera calibration", "CTRL-P to display the control pannel"
+                       "\nAdjust the gamma and threshold for each camera until the corners are correctly detected and the reprojection error is low."
+                        "\nThen click 'Validate Calibration' or close the window to proceed.", 5000)
+    
+    marker_size = 70
+    marker_position_dic, marker_rotation_dic = create_marker_center_and_rotation_dictionaries()
+    arcuco_corner_3D_position_dictionnay = create_aruco_corners_3D_positions_dictionaty(marker_position_dic,marker_rotation_dic,marker_size)
+    max_of_all_errors = 0.0
+    while not validated:  # Wait for calibration to complete (or timeout)
+        calibration_images = np.empty((cameras[0]._camera.height*2,0 ,3), dtype=np.uint8)  # Initialize an empty array to hold the calibration images
+        for camera in cameras:
+            max_error, color_image,thresh_image = estimate_transform(camera, arcuco_corner_3D_position_dictionnay,gamma=calibration_parameters['gamma '+camera.camera_serial], threshold=calibration_parameters['threshold '+camera.camera_serial])
+            max_of_all_errors = max(max_of_all_errors, max_error)
+            if thresh_image is None:
+                continue
+            else:
+                image = np.vstack((color_image, cv2.cvtColor(thresh_image, cv2.COLOR_GRAY2BGR)))
+                cv2.putText(image, f"Camera {camera.camera_serial}, reprojection error = {max_error:.2f} pixels", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            if calibration_images is None:
+                calibration_images = image
+            else:
+                calibration_images = np.hstack((calibration_images, image))
+            
+        calibration_images = cv2.resize(calibration_images, (0, 0), fx=0.5, fy=0.5)
+        
+        
+        if cv2.getWindowProperty("Camera calibration", cv2.WND_PROP_VISIBLE) <1:  # Check if the window has been closed
+            logger.info("Calibration window closed by user. Exiting calibration.")
+            validated = True
+            break
+        cv2.imshow(f"Camera calibration", calibration_images)
+        cv2.waitKey(1)  # Needed to update OpenCV windows
+       
+    cv2.destroyWindow("Camera calibration")
+    return max_of_all_errors
+
 def create_aruco_corners_3D_positions_dictionaty(marker_position_dic, marker_rotation_dic,marker_size):
+    '''
+    Create a dictionary mapping ArUco marker IDs to their 3D corner positions in the marker reference frame.
+    This function takes the marker center positions and rotations, and computes the 3D positions of the corners of each marker based on the marker size.   
+    
+        Args:
+            marker_position_dic: Dictionary mapping marker IDs to their 3D center positions.
+            marker_rotation_dic: Dictionary mapping marker IDs to their rotation matrices.
+            marker_size: Size of the ArUco marker in millimeters.
+        Returns:
+            dict: Dictionary mapping marker IDs to their 3D corner positions as numpy arrays of shape (4, 3).
+    '''
+
     arcuco_marker_positions = dict()
     marker_points = np.array([
                 [-marker_size/2, marker_size/2, 0],
@@ -420,6 +490,7 @@ def visualize_matches(cameras, matches, Ks, Rs, Ts):
         Rs: List of rotation matrices.
         Ts: List of translation vectors.
     """
+    final_images = []
     for id_camera in range(len(cameras)):
         camera = cameras[id_camera]
         image = camera._camera.frame.copy()
@@ -435,8 +506,9 @@ def visualize_matches(cameras, matches, Ks, Rs, Ts):
                     v_proj = int(x[1]) 
                     cv2.circle(image, (u_proj, v_proj), 20, (255, 0, 0), 4)
                     cv2.putText(image, f"ID {i}", (u_proj+20, v_proj), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-        image = cv2.resize(image, (0, 0), fx=0.75, fy=0.75)
-        cv2.imshow(f"Camera {camera.camera_serial} matches", image)
+        image = cv2.resize(image, (0, 0), fx=0.5, fy=0.5)
+        final_images.append(image)
+    return final_images
 
     
 def visualize_tracks(cameras, tracks, Ks, Rs, Ts):
@@ -449,9 +521,8 @@ def visualize_tracks(cameras, tracks, Ks, Rs, Ts):
         Rs: List of rotation matrices.
         Ts: List of translation vectors.
     """
-    for track in tracks:
-        
-        logger.info(f"Id {track['id']} Track position: {np.round(track['pos'], decimals=2)}")
+    # for track in tracks:
+    #     logger.info(f"Id {track['id']} Track position: {np.round(track['pos'], decimals=2)}")
 
     final_images = []
     for id_camera in range(len(cameras)):
@@ -466,10 +537,8 @@ def visualize_tracks(cameras, tracks, Ks, Rs, Ts):
             cv2.putText(image, f"ID {track['id']}", (u_proj+10, v_proj+10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
         image = cv2.resize(image, (0, 0), fx=0.5, fy=0.5)
         final_images.append(image)
-    #cv2.imshow(f"Camera {camera.camera_serial} tracks", image)
     return final_images
-    # if final_image is not None:
-    #     cv2.imshow("Final Image", final_image)
+
 
 
 if __name__ == "__main__":
@@ -486,6 +555,11 @@ if __name__ == "__main__":
         for sn in cameras_sn:
             logger.info(f"Camera SN: {sn}")
             cameras.append(EmioCamera(sn, show=False, track_markers=True, compute_point_cloud=False))
+    except Exception as e:
+        logger.exception(f"An error occurred while initializing cameras: {e}")
+        sys.exit(1)
+    
+    try:
         for camera in cameras:
             camera._camera.height = 720
             camera._camera.width = 1280
