@@ -7,9 +7,12 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.realpath(__file__))+'/..')
 from emioapi import EmioMotors
+import argparse
+import csv
+from emioapi._logging_config import logger
 
 
-def main():
+def main(Kp:float=800, Ki:float=0, Kd:float=0,duration:float=0.3, reference:float=0.1):
 
     # open motors
     motors = EmioMotors()
@@ -20,7 +23,7 @@ def main():
 
     # initial and target angles
     init_angles = np.array([0.0, 0, 0.0, 0])
-    target_angles = init_angles + np.array([0.1, 0, 0, 0])
+    target_angles = init_angles + np.array([reference, 0, 0, 0])
     motors.angles = init_angles
     time.sleep(1)
 
@@ -51,12 +54,12 @@ def main():
 
 
     motors.angles = init_angles
-
-    motors.position_p_gain = [8800, 800, 8800, 800]
-    motors.position_i_gain = [0, 0, 0, 0]
-    motors.position_d_gain = [0, 0, 0, 0]
-    print("Set second PID gains.")
     time.sleep(1)
+    motors.position_p_gain = [int(Kp), 800, 800, 800]
+    motors.position_i_gain = [int(Ki), 0, 0, 0]
+    motors.position_d_gain = [int(Kd), 0, 0, 0]
+    print("Set second PID gains.")
+    time.sleep(0.1)
 
     p_gains = motors.position_p_gain
     i_gains = motors.position_i_gain
@@ -70,9 +73,18 @@ def main():
     motors.angles = target_angles
     times.append(time.time())
     t0 = time.time()
-    while time.time() - t0 < 0.3:
+    while time.time() - t0 < duration:
         measures.append(motors.angles)
         times.append(time.time())
+    time.sleep(1)
+
+    # setting fisrt PID gains back to default
+    motors.position_p_gain = [800, 800, 800, 800]
+    motors.position_i_gain = [0, 0, 0, 0]
+    motors.position_d_gain = [0, 0, 0, 0]
+    print("Reset PID gains to default.")
+    # putting motors to initial position
+    motors.angles = init_angles
     time.sleep(1)
 
     motors.close()
@@ -89,16 +101,34 @@ def main():
     measuresRef = [target_angles[0] - init_angles[0]] * len(timesRef)
 
     # Plot to compare the two responses
+    print("Plotting results...")
+    print("Close the plot window to finish.")
     plt.figure()
     plt.plot(timesRef, measuresRef, "-r", label="ref")
-    plt.plot(times1, measures1[:, 0], "--", label="PID 1")
-    plt.plot(times2, measures2[:, 0], "--", label="PID 2")
+    plt.plot(times1, measures1[:, 0], "--", label="default PID")
+    plt.plot(times2, measures2[:, 0], "--", label="user PID")
     plt.xlabel("Time [s]")
     plt.ylabel("Angle [rad]")
     plt.title("Motor Position Control with Different PID Gains")
     plt.legend()
     plt.show()
 
+    with open('motors_pid_position_data.csv', 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['Time (s)', 'Reference (rad)', 'default PID (rad)', 'user PID (rad)'])
+        for t, ref, pid1, pid2 in zip(timesRef, measuresRef, measures1[:, 0], measures2[:, 0]):
+            writer.writerow([t, ref, pid1, pid2])
+
+
+
 
 if __name__ == "__main__":
-    main()
+    # retrieve command line arguments for PID gains, duration, and reference position
+    parser = argparse.ArgumentParser(description="Control DYNAMIXEL motors in position mode with PID control.")
+    parser.add_argument("Kp", type=float, help="Proportional gain for PID control.", default=800)
+    parser.add_argument("Ki", type=float, help="Integral gain for PID control.", default=0)
+    parser.add_argument("Kd", type=float, help="Derivative gain for PID control.", default=0)
+    parser.add_argument("--duration", type=float, help="Duration of the second PID test in seconds.", default=0.3)
+    parser.add_argument("--reference", type=float, help="Reference position in radians.", default=0.1)
+    args = parser.parse_args()
+    main(Kd=args.Kd, Ki=args.Ki, Kp=args.Kp, duration=args.duration, reference=args.reference)
