@@ -12,14 +12,26 @@ import csv
 from emioapi._logging_config import logger
 
 
+RAW_PER_PUSLE_TO_VOLT_PER_RAD = (12/885)/(2*3.14/4096)
+VOLT_PER_RAD_TO_RAW_PER_PULSE = 1/RAW_PER_PUSLE_TO_VOLT_PER_RAD
+DT = 2/1000 # control loop time step in seconds (2 ms)
+def Kp_to_Kptable(Kp):
+    return Kp*128*VOLT_PER_RAD_TO_RAW_PER_PULSE
+
+def Ki_to_Kitable(Ki):
+    return Ki*65536*VOLT_PER_RAD_TO_RAW_PER_PULSE*DT
+
+def Kd_to_Kdtable(Kd):
+    return Kd*16*VOLT_PER_RAD_TO_RAW_PER_PULSE/DT
+
 def main(Kp:float=800, Ki:float=0, Kd:float=0,duration:float=0.3, reference:float=0.1):
 
     # open motors
     motors = EmioMotors()
     while not motors.open():
-        print("Waiting for motors to open...")
+        logger.info("Waiting for motors to open...")
         time.sleep(1)
-    print("Motors opened successfully.")
+    logger.info("Motors opened successfully.")
 
     # initial and target angles
     init_angles = np.array([0.0, 0, 0.0, 0])
@@ -31,15 +43,15 @@ def main(Kp:float=800, Ki:float=0, Kd:float=0,duration:float=0.3, reference:floa
     motors.position_p_gain = [800, 800, 800, 800]
     motors.position_i_gain = [0, 0, 0, 0]
     motors.position_d_gain = [0, 0, 0, 0]
-    print("Set first PID gains.")
+    logger.info("Set first PID gains.")
     time.sleep(1)
 
     p_gains = motors.position_p_gain
     i_gains = motors.position_i_gain
     d_gains = motors.position_d_gain
-    print(f"Current position P gains: {p_gains}")
-    print(f"current position i gains: {i_gains}")
-    print(f"Current position D gains: {d_gains}")
+    logger.info(f"Current position P gains: {p_gains}")
+    logger.info(f"current position i gains: {i_gains}")
+    logger.info(f"Current position D gains: {d_gains}")
 
     # move to target and record response
     measures = [motors.angles]
@@ -58,15 +70,15 @@ def main(Kp:float=800, Ki:float=0, Kd:float=0,duration:float=0.3, reference:floa
     motors.position_p_gain = [int(Kp), 800, 800, 800]
     motors.position_i_gain = [int(Ki), 0, 0, 0]
     motors.position_d_gain = [int(Kd), 0, 0, 0]
-    print("Set second PID gains.")
+    logger.info("Set second PID gains.")
     time.sleep(0.1)
 
     p_gains = motors.position_p_gain
     i_gains = motors.position_i_gain
     d_gains = motors.position_d_gain
-    print(f"Updated position P gains: {p_gains}")
-    print(f"Updated position I gains: {i_gains}")
-    print(f"Updated position D gains: {d_gains}")
+    logger.info(f"Updated position P gains: {p_gains}")
+    logger.info(f"Updated position I gains: {i_gains}")
+    logger.info(f"Updated position D gains: {d_gains}")
 
     # move to target and record response
     measures.append(motors.angles)
@@ -82,13 +94,13 @@ def main(Kp:float=800, Ki:float=0, Kd:float=0,duration:float=0.3, reference:floa
     motors.position_p_gain = [800, 800, 800, 800]
     motors.position_i_gain = [0, 0, 0, 0]
     motors.position_d_gain = [0, 0, 0, 0]
-    print("Reset PID gains to default.")
+    logger.info("Reset PID gains to default.")
     # putting motors to initial position
     motors.angles = init_angles
     time.sleep(1)
 
     motors.close()
-    print("Motors closed.")
+    logger.info("Motors closed.")
 
     # process data
     measures = np.array(measures)
@@ -101,8 +113,8 @@ def main(Kp:float=800, Ki:float=0, Kd:float=0,duration:float=0.3, reference:floa
     measuresRef = [target_angles[0] - init_angles[0]] * len(timesRef)
 
     # Plot to compare the two responses
-    print("Plotting results...")
-    print("Close the plot window to finish.")
+    logger.info("Plotting results...")
+    logger.info("Close the plot window to finish.")
     plt.figure()
     plt.plot(timesRef, measuresRef, "-r", label="ref")
     plt.plot(times1, measures1[:, 0], "--", label="default PID")
@@ -125,10 +137,17 @@ def main(Kp:float=800, Ki:float=0, Kd:float=0,duration:float=0.3, reference:floa
 if __name__ == "__main__":
     # retrieve command line arguments for PID gains, duration, and reference position
     parser = argparse.ArgumentParser(description="Control DYNAMIXEL motors in position mode with PID control.")
-    parser.add_argument("Kp", type=float, help="Proportional gain for PID control.", default=800)
+    parser.add_argument("Kp", type=float, help="Proportional gain for PID control.", default=1.0)
     parser.add_argument("Ki", type=float, help="Integral gain for PID control.", default=0)
     parser.add_argument("Kd", type=float, help="Derivative gain for PID control.", default=0)
     parser.add_argument("--duration", type=float, help="Duration of the second PID test in seconds.", default=0.3)
     parser.add_argument("--reference", type=float, help="Reference position in radians.", default=0.1)
     args = parser.parse_args()
-    main(Kd=args.Kd, Ki=args.Ki, Kp=args.Kp, duration=args.duration, reference=args.reference)
+    # convert to table values
+    Kp = Kp_to_Kptable(args.Kp)
+    Ki = Ki_to_Kitable(args.Ki)
+    Kd = Kd_to_Kdtable(args.Kd)
+    print(f"Converted PID gains to table values: Kp={Kp}, Ki={Ki}, Kd={Kd}")
+    input("Press Enter to start the test with the specified PID gains...")
+
+    main(Kd=Kd, Ki=Ki, Kp=Kp, duration=args.duration, reference=args.reference)
