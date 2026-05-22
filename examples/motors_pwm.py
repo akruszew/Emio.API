@@ -19,7 +19,7 @@ import csv
 This example demonstrates how to use the EMIO API to control DYNAMIXEL motors in PWM mode.
 '''
 
-def main(emio: EmioMotors, u1 = 200, u2 = 400, loops=500, motor_id=1):
+def main(emio: EmioMotors, u1 = 200, u2 = 400, loops=500, motor_id=0):
     '''
         Main function to run the PWM test.
         Parameters:
@@ -150,7 +150,7 @@ if __name__ == "__main__":
             logger.info("Emio motors opened and configured.")
             logger.info("Running main function...")
             
-            main(emio_motors, u1=u1, u2=u2, loops=number_of_samples, motor_id=1)
+            main(emio_motors, u1=u1, u2=u2, loops=number_of_samples, motor_id=0)
 
             logger.info("Main function completed.")
             logger.info("Closing Emio motor connection...")
