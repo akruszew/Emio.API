@@ -7,4 +7,5 @@ opencv-python
 --find-links https://github.com/cansik/pyrealsense2-macosx/releases; 
 pyrealsense2; platform_system == "Windows" or platform_system == "Linux"
 pyrealsense2-macosx; platform_system == "Darwin"
+matplotlib
 
