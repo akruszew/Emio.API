@@ -14,7 +14,7 @@ from emioapi._logging_config import logger
 import argparse
 import csv
 
-
+logger.setLevel(logging.WARNING) # set the logging level to WARNING to reduce the amount of logs printed to the console. Change to INFO or DEBUG for more detailed logs.
 '''
 This example demonstrates how to use the EMIO API to control DYNAMIXEL motors in PWM mode.
 '''
@@ -65,10 +65,18 @@ def main(emio: EmioMotors, u1 = 200, u2 = 400, loops=500, motor_id=0):
                 
             
     emio.goal_pwm=[0]*4
+    mean_dt = np.mean(dt)
+    
+    if(mean_dt > 0.002):
+        logger.warning(f"\nLoop time is {mean_dt:.4f} seconds, which is higher than the expected 0.002 seconds.\nPlease set USB_LATENCY=1 on your system")
+
+    
     logger.info("PWM test completed. Plotting results...")
-    logger.info(f"Average loop time: {np.mean(dt):.4f} seconds")
+    logger.info(f"Average loop time: {mean_dt:.4f} seconds")
     logger.info("Plotting PWM and velocity over time...")
     
+    
+
     fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True)
     ax1.plot(t, pwm, '-+')
     ax2.plot(t, speed, '-+')
@@ -80,10 +88,10 @@ def main(emio: EmioMotors, u1 = 200, u2 = 400, loops=500, motor_id=0):
     cursor1 = matplotlib.widgets.Cursor(ax1, useblit=True, color='red', linewidth=1)
     cursor2 = matplotlib.widgets.Cursor(ax2, useblit=True, color='red', linewidth=1)
     
-    logger.info("Close the plot window to continue...")
+    print("Close the plot window to continue...")
     plt.show()
 
-    logger.info("Plotting completed. Saving data to motors_pwm_data.csv")
+    print("Plotting completed. Saving data to motors_pwm_data.csv")
     with open('motors_pwm_data.csv', 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(['Time (s)', 'Voltage (V)', 'Velocity (RPM)'])
@@ -135,8 +143,14 @@ if __name__ == "__main__":
     parser.add_argument("Voltage_2", type=float, help="Second voltage value to set.")
     parser.add_argument("--samples", type=int, help="Number of samples to acquire.", default=500)
     
-    args = parser.parse_args()
 
+    if(len(sys.argv) == 1):
+        print("\n"*2)
+        print("No arguments provided. Using default values: Voltage_1 = 2V, Voltage_2 = 6V, samples = 500\nUse --help to see available options.")
+        args = parser.parse_args(["2", "6"])
+    else:
+        args = parser.parse_args()
+    
     u1 = volt_to_pwm(args.Voltage_1)
     u2 = volt_to_pwm(args.Voltage_2)
     number_of_samples = args.samples

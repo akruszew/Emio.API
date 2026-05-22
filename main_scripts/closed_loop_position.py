@@ -10,11 +10,19 @@ from emioapi import EmioMotors
 import argparse
 import csv
 from emioapi._logging_config import logger
+import logging
 
+logger.setLevel(logging.WARNING) 
+
+SAVE_FILENAME = 'motors_pid_position_data.csv'
 
 RAW_PER_PUSLE_TO_VOLT_PER_RAD = (12/885)/(2*3.14/4096)
 VOLT_PER_RAD_TO_RAW_PER_PULSE = 1/RAW_PER_PUSLE_TO_VOLT_PER_RAD
 DT = 2/1000 # control loop time step in seconds (2 ms)
+
+
+
+
 def Kp_to_Kptable(Kp):
     return Kp*128*VOLT_PER_RAD_TO_RAW_PER_PULSE
 
@@ -24,7 +32,13 @@ def Ki_to_Kitable(Ki):
 def Kd_to_Kdtable(Kd):
     return Kd*16*VOLT_PER_RAD_TO_RAW_PER_PULSE/DT
 
-def main(Kp:float=800, Ki:float=0, Kd:float=0,duration:float=0.3, reference:float=0.1):
+def main(Kp_user:float=0, Ki_user:float=0, Kd_user:float=0,duration:float=0.3, reference:float=0.1):
+
+    # convert to table values
+    Kp = Kp_to_Kptable(Kp_user)
+    Ki = Ki_to_Kitable(Ki_user)
+    Kd = Kd_to_Kdtable(Kd_user)
+    
 
     # open motors
     motors = EmioMotors()
@@ -43,7 +57,7 @@ def main(Kp:float=800, Ki:float=0, Kd:float=0,duration:float=0.3, reference:floa
     motors.position_p_gain = [800, 800, 800, 800]
     motors.position_i_gain = [0, 0, 0, 0]
     motors.position_d_gain = [0, 0, 0, 0]
-    logger.info("Set first PID gains.")
+    print("Set default PID gains")
     time.sleep(1)
 
     p_gains = motors.position_p_gain
@@ -70,7 +84,7 @@ def main(Kp:float=800, Ki:float=0, Kd:float=0,duration:float=0.3, reference:floa
     motors.position_p_gain = [int(Kp), 800, 800, 800]
     motors.position_i_gain = [int(Ki), 0, 0, 0]
     motors.position_d_gain = [int(Kd), 0, 0, 0]
-    logger.info("Set second PID gains.")
+    print(f"Set user PID gains Kp = {Kp_user},Kd = {Kd_user},Ki = {Ki_user}")
     time.sleep(0.1)
 
     p_gains = motors.position_p_gain
@@ -113,8 +127,10 @@ def main(Kp:float=800, Ki:float=0, Kd:float=0,duration:float=0.3, reference:floa
     measuresRef = [target_angles[0] - init_angles[0]] * len(timesRef)
 
     # Plot to compare the two responses
-    logger.info("Plotting results...")
-    logger.info("Close the plot window to finish.")
+    print("\n"*2)
+    print("-"*20)
+    print(f"Plotting results and saving to {SAVE_FILENAME}")
+    print("Close the plot window to finish.")
     plt.figure()
     plt.plot(timesRef, measuresRef, "-r", label="ref")
     plt.plot(times1, measures1[:, 0], "--", label="default PID")
@@ -123,14 +139,15 @@ def main(Kp:float=800, Ki:float=0, Kd:float=0,duration:float=0.3, reference:floa
     plt.ylabel("Angle [rad]")
     plt.title("Motor Position Control with Different PID Gains")
     plt.legend()
-    plt.show()
+    
 
-    with open('motors_pid_position_data.csv', 'w', newline='') as csvfile:
+    with open(SAVE_FILENAME, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(['Time (s)', 'Reference (rad)', 'default PID (rad)', 'user PID (rad)'])
         for t, ref, pid1, pid2 in zip(timesRef, measuresRef, measures1[:, 0], measures2[:, 0]):
             writer.writerow([t, ref, pid1, pid2])
 
+    plt.show()
 
 
 
@@ -142,12 +159,15 @@ if __name__ == "__main__":
     parser.add_argument("Kd", type=float, help="Derivative gain for PID control.", default=0)
     parser.add_argument("--duration", type=float, help="Duration of the second PID test in seconds.", default=0.3)
     parser.add_argument("--reference", type=float, help="Reference position in radians.", default=0.1)
-    args = parser.parse_args()
-    # convert to table values
-    Kp = Kp_to_Kptable(args.Kp)
-    Ki = Ki_to_Kitable(args.Ki)
-    Kd = Kd_to_Kdtable(args.Kd)
-    print(f"Converted PID gains to table values: Kp={Kp}, Ki={Ki}, Kd={Kd}")
+   
+    if(len(sys.argv) == 1):
+        print("\n"*2)
+        print("No arguments provided. Using default values: Kp=10.0 Ki = 0.0 Kd = 0.0\nUse --help to see available options.\n")
+        args = parser.parse_args(["10.0", "0" ,"0"])
+    else:
+        args = parser.parse_args()
+    
+
     input("Press Enter to start the test with the specified PID gains...")
 
-    main(Kd=Kd, Ki=Ki, Kp=Kp, duration=args.duration, reference=args.reference)
+    main(Kd_user=args.Kd, Ki_user=args.Ki, Kp_user=args.Kp, duration=args.duration, reference=args.reference)

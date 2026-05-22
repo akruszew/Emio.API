@@ -19,6 +19,16 @@ SAVE_FILE = "camera_1D_motion_data.csv"
 
 logger.setLevel(logging.WARNING) # set the logging level to WARNING to reduce the amount of logs printed to the console. Change to INFO or DEBUG for more detailed logs.
 
+def update_camera(camera):
+    camera.update()
+    check_number_of_tracker(camera)
+
+def check_number_of_tracker(camera):
+    if not len(camera._trackers_pos_camera_image)==3:
+                logger.warning('Camera doest not detect the 3 markers')
+                input("press enter to exit")
+                sys.exit(0)
+
 def main(camera: EmioCamera, emioMotors: EmioMotors, angles_deg: list):
 
     #camera.calibrate()  # calibrate the camera if needed
@@ -46,15 +56,17 @@ def main(camera: EmioCamera, emioMotors: EmioMotors, angles_deg: list):
         if not camera.is_running:
             break
         try:
-            camera.update() # update the camera frame and trackers
+            update_camera(camera) # update the camera frame and trackers
+            
             pos = np.asarray(camera._trackers_pos_camera_image)
+            
             motor_angle = -angle*np.pi/180
             emioMotors.angles = [motor_angle, -motor_angle] * 2
             print("-"*20)
             print(f"Set motor angle to {angle} degrees. Waiting for the trackers to stabilize...")
             frame_without_moving = 0
             while frame_without_moving < 20: # wait until the trackers have stabilized
-                camera.update() # update the camera frame and trackers
+                update_camera(camera) # update the camera frame and trackers
                 new_pos = np.asarray(camera._trackers_pos_camera_image)
                 delta = np.linalg.norm(new_pos - pos)
                 if delta < 1: # if the trackers have stabilized
