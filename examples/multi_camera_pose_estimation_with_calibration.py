@@ -9,6 +9,7 @@ runs real-time triangulation and tracking of 3D points from multiple camera view
 The script uses threading for concurrent camera updates and visualization.
 """
 
+from enum import Enum
 import time
 import logging
 import os
@@ -26,6 +27,7 @@ import emioapi._tracking as tracking
 import emioapi._camerafeedwindow as camerafeedwindow
 import tkinter as tk
 
+parameter = {'hue_h': 91, 'hue_l': 62, 'sat_h': 255, 'sat_l': 113, 'value_h': 255, 'value_l': 44, 'erosion_size': 0, 'area': 2}
 
 def DetectArucoCorners(frame:np.ndarray):
     
@@ -121,7 +123,7 @@ def estimate_transform(camera: EmioCamera, marker_corner_position_dic: dict[int,
             cv2.circle(color_frame, (u_proj, v_proj), 5, (0, 255, 0), -1)
         error = np.linalg.norm(projected_points.squeeze() - obj_corners, axis=1)
         max_error = np.max(error)
-    logger.info(f"Camera {camera.camera_serial} reprojection error: {np.round(error, decimals=2)} pixels")
+        logger.info(f"Camera {camera.camera_serial} reprojection error: {np.round(error, decimals=2)} pixels")
             
     
     return max_error, color_frame.copy(), thresh_image.copy()
@@ -187,10 +189,11 @@ def main(cameras: list[EmioCamera]):
     def log_tracker(tracker=tracker):
         while True:
             time.sleep(0.1)
-            s="\n"
+            s = ""
             for track in tracker.tracks:
                 s += f"ID {track.id}: pos {np.round(track.pos, decimals=2)}, misses {track.misses} | "
-            logger.info(s)
+            if len(s) > 0:  
+                logger.info("\n"+s)
             
     # Start the logger thread
     logger_thread = threading.Thread(target=log_tracker, args=(tracker,))
@@ -227,7 +230,24 @@ def run_tracking_system(cameras,tracker):
 
     cv2.namedWindow("Tracks", cv2.WINDOW_FREERATIO)
     cv2.resizeWindow('Tracks', 1200, 800)
+    
+
+    class VisualizerMode(Enum):
+        MATCHES = 'matches'
+        TRACKS = 'tracks'
+        RAW = 'raw'
+    
+    
+    visu_mode = VisualizerMode.MATCHES
+    def set_visu_mode(mode):
+        nonlocal visu_mode
+        visu_mode = mode
+        logger.info(f"Visualizer mode set to {visu_mode.value}")
+
+    for mode in [VisualizerMode.MATCHES, VisualizerMode.TRACKS, VisualizerMode.RAW]:
+        cv2.createButton(mode.value, lambda *args, m=mode: set_visu_mode(m), None, cv2.QT_PUSH_BUTTON, 1)
     cv2.createButton("Exit", lambda *args: sys.exit(0), None, cv2.QT_PUSH_BUTTON, 1)
+    
 
     while cameras[0].is_running:  # Assuming all cameras have the same running state
         try:
@@ -262,8 +282,13 @@ def run_tracking_system(cameras,tracker):
             tracks = tracker.update(X_meas, t)
             t += dt
             logger.debug(f"Frame time: {time.time() - current_time:.4f} seconds, Tracks: {len(tracks)}")
-            #visualize_matches(cameras, matches, Ks, Rs, Ts)
-            images = visualize_tracks(cameras, tracks, Ks, Rs, Ts)
+            if visu_mode is VisualizerMode.MATCHES:
+                images = visualize_matches(cameras, matches, Ks, Rs, Ts)
+            elif visu_mode is VisualizerMode.TRACKS:
+                images = visualize_tracks(cameras, tracks, Ks, Rs, Ts)
+            else:
+                images = [camera._camera.frame for camera in cameras]
+
             concatenated_image = None
             for image in images:
                 if image is not None:
@@ -322,8 +347,9 @@ def calibrate_cameras(cameras):
     marker_size = 70
     marker_position_dic, marker_rotation_dic = create_marker_center_and_rotation_dictionaries()
     arcuco_corner_3D_position_dictionnay = create_aruco_corners_3D_positions_dictionaty(marker_position_dic,marker_rotation_dic,marker_size)
-    max_of_all_errors = 0.0
+    
     while not validated:  # Wait for calibration to complete (or timeout)
+        max_of_all_errors = 0.0
         calibration_images = np.empty((cameras[0]._camera.height*2,0 ,3), dtype=np.uint8)  # Initialize an empty array to hold the calibration images
         for camera in cameras:
             max_error, color_image,thresh_image = estimate_transform(camera, arcuco_corner_3D_position_dictionnay,gamma=calibration_parameters['gamma '+camera.camera_serial], threshold=calibration_parameters['threshold '+camera.camera_serial])
@@ -554,7 +580,7 @@ if __name__ == "__main__":
         cameras = []
         for sn in cameras_sn:
             logger.info(f"Camera SN: {sn}")
-            cameras.append(EmioCamera(sn, show=False, track_markers=True, compute_point_cloud=False))
+            cameras.append(EmioCamera(sn, show=False, track_markers=True, compute_point_cloud=False, parameter=parameter))
     except Exception as e:
         logger.exception(f"An error occurred while initializing cameras: {e}")
         sys.exit(1)
@@ -564,8 +590,9 @@ if __name__ == "__main__":
             camera._camera.height = 720
             camera._camera.width = 1280
             camera.fps = 30  # Sets the fps to 30. Default is 60 and can only be one of 30, 60 or 90 fps
-            camera.depth_max = 600  # Sets the maximum depth to 600mm. Default is 430mm
+            camera.depth_max = 6000  # Sets the maximum depth to 600mm. Default is 430mm
             camera.depth_min = 0  # Sets the minimum depth to 0mm. Default is 2mm
+            
             camera.open(camera.camera_serial)
             logger.info(f"Emio camera {camera.camera_serial} opened.")
         
