@@ -97,7 +97,8 @@ class DepthCamera:
                  compute_point_cloud: bool=False,
                  show_video_feed: bool=False,
                  tracking: bool=True,
-                 configuration: str="extended") -> None:
+                 configuration: str="extended",
+                 depth_channel_enabled: bool=True) -> None:
         """
         Initialize the camera and the parameters.
 
@@ -112,11 +113,14 @@ class DepthCamera:
                 If True, the tracking will be enabled.
             configuration: str
                 Configuration of Emio, either "extended" (default) or "compact"
+            depth_channel_enabled: bool
+                If True, the depth channel will be enabled.
         """
         self.tracking = tracking
         self.show_video_feed = show_video_feed
         self.compute_point_cloud = compute_point_cloud
         self.configuration = configuration
+        self.depth_channel_enabled = depth_channel_enabled
         self._camera_serial = camera_serial
         self.initialized = True
 
@@ -141,7 +145,7 @@ class DepthCamera:
         default_param = self.parameter.copy()
 
         self.initialized = True
-
+        
         if self.show_video_feed:
             self.create_feed_windows()
 
@@ -224,16 +228,18 @@ class DepthCamera:
         self.pipeline_profile = self.rsconfig.resolve(self.pipeline_wrapper)
 
         self.device = self.pipeline_profile.get_device()
-
-        self.rsconfig.enable_stream(rs.stream.depth, self.width, self.height, rs.format.z16, self.fps)
         self.rsconfig.enable_stream(rs.stream.color, self.width, self.height, rs.format.bgr8, self.fps)
 
-        depth_sensor = self.device.first_depth_sensor()
-        depth_sensor.set_option(rs.option.depth_units, 0.001)
+        if self.depth_channel_enabled:
+            self.rsconfig.enable_stream(rs.stream.depth, self.width, self.height, rs.format.z16, self.fps)            
+            depth_sensor = self.device.first_depth_sensor()
+            depth_sensor.set_option(rs.option.depth_units, 0.001)
 
         cfg = self.pipeline.start(self.rsconfig)
-
-        self.profile = cfg.get_stream(rs.stream.depth)
+        if self.depth_channel_enabled:
+            self.profile = cfg.get_stream(rs.stream.depth)
+        else:
+            self.profile = cfg.get_stream(rs.stream.color)
         self.intr = self.profile.as_video_stream_profile().get_intrinsics()
 
         # Initialize the position estimation by reading the calibration file
@@ -286,15 +292,20 @@ class DepthCamera:
         # Wait for a coherent pair of frames: depth and color
 
         frames = self.pipeline.wait_for_frames()
-
-        depth_frame = frames.get_depth_frame()
+        if self.depth_channel_enabled:
+            depth_frame = frames.get_depth_frame()
+        else:
+            depth_frame = None
         color_frame = frames.get_color_frame()
 
-        if not depth_frame or not color_frame:
+        if not color_frame:
             return False, color_frame, depth_frame,None
 
         # Convert images to numpy arrays
-        depth_image = np.asanyarray(depth_frame.get_data())
+        if depth_frame:
+            depth_image = np.asanyarray(depth_frame.get_data())
+        else:
+            depth_image = None
         color_image = np.asanyarray(color_frame.get_data())
         return True, color_image, depth_image, depth_frame
 
@@ -330,9 +341,9 @@ class DepthCamera:
 
         # red color mask (sort of thresholding, actually segmentation)
         mask = cv.inRange(self.hsvFrame, red_lower, red_upper)
-        mask2 = cv.inRange(self.depth_frame, self.depth_min, self.depth_max)
-
-        mask = cv.bitwise_and(mask, mask2, mask=mask)
+        if self.depth_channel_enabled:
+            mask2 = cv.inRange(self.depth_frame, self.depth_min, self.depth_max)
+            mask = cv.bitwise_and(mask, mask2, mask=mask)
 
         erosion_shape = cv.MORPH_RECT
         erosion_size = self.parameter['erosion_size']
@@ -355,7 +366,10 @@ class DepthCamera:
                     if a > self.parameter['area']:
                         x, y = compute_contour_center(contours[i])
                         self.trackers_pos_image.append([x,y])
-                        depth = compute_median_depth(contours[i], self.depth_frame) if self.depth_frame[y, x] == 0 else self.depth_frame[y, x]
+                        if (self.depth_channel_enabled):
+                            depth = compute_median_depth(contours[i], self.depth_frame) if self.depth_frame[y, x] == 0 else self.depth_frame[y, x]
+                        else:
+                            depth = 10.0 # set a default depth value when the depth channel is disabled, since we need it for
                         worldx, worldy, worldz = self.position_estimator.camera_image_to_simulation(x, y, depth)
                         self.trackers_pos.append([worldx, worldy, worldz])
 

@@ -56,9 +56,9 @@ def estimate_transform(camera: EmioCamera, marker_corner_position_dic: dict[int,
     
     dist_coeffs = np.zeros((4, 1))
     camera_matrix = camera._camera.build_camera_intrinsics_matrix()
-    
     _, color_frame,_,_ = camera._camera.get_frame()
-
+    
+    
     gray = cv2.cvtColor(color_frame, cv2.COLOR_BGR2GRAY)
     _,thresh_image = cv2.threshold(gray,threshold,255,cv2.THRESH_TOZERO)
     thresh_image = np.array(255 * (thresh_image / 255) ** gamma, dtype='uint8')
@@ -68,7 +68,8 @@ def estimate_transform(camera: EmioCamera, marker_corner_position_dic: dict[int,
     if ids is None or len(ids) == 0:
         logger.warning(f"No ArUco markers detected for camera {camera.camera_serial}. Calibration failed.")
         return np.inf,color_frame.copy(), thresh_image.copy()
-
+    else:
+        logger.info(f"Camera {camera.camera_serial} detected ArUco markers with IDs: {ids.flatten()}")
     for i in range(len(ids)):
         id = int(ids[i][0])
         if id in marker_corner_position_dic.keys():
@@ -133,6 +134,7 @@ def create_marker_center_and_rotation_dictionaries():
     marker_centers = {
         672: np.array([0, 0, 0]),  # Marker ID 672 at the origin
         42:  np.array([84, 0, 0]),  # Marker ID 42 at (84mm, 0, 0)
+        909: np.array([0, 0, 0]),  # Marker ID 909 at (0, 84mm, 0)
         # Add more markers here if needed
     }
     from scipy.spatial.transform import Rotation as R
@@ -140,6 +142,7 @@ def create_marker_center_and_rotation_dictionaries():
     marker_rotation = { 
         672: R_xy_plane,
         42:  R.from_euler('z', 90, degrees=True).as_matrix() @ R_xy_plane,  # Rotate marker 42 by 90 degrees around Z-axis
+        909: R_xy_plane,  # No rotation for marker 909
     }
     return marker_centers, marker_rotation
 
@@ -344,7 +347,7 @@ def calibrate_cameras(cameras):
                        "\nAdjust the gamma and threshold for each camera until the corners are correctly detected and the reprojection error is low."
                         "\nThen click 'Validate Calibration' or close the window to proceed.", 5000)
     
-    marker_size = 70
+    marker_size = 195
     marker_position_dic, marker_rotation_dic = create_marker_center_and_rotation_dictionaries()
     arcuco_corner_3D_position_dictionnay = create_aruco_corners_3D_positions_dictionaty(marker_position_dic,marker_rotation_dic,marker_size)
     
@@ -592,7 +595,7 @@ if __name__ == "__main__":
             camera.fps = 30  # Sets the fps to 30. Default is 60 and can only be one of 30, 60 or 90 fps
             camera.depth_max = 6000  # Sets the maximum depth to 600mm. Default is 430mm
             camera.depth_min = 0  # Sets the minimum depth to 0mm. Default is 2mm
-            
+            camera._camera.depth_channel_enabled = False  # Disable the depth channel to reduce CPU usage, since we only need the color channel for this example
             camera.open(camera.camera_serial)
             logger.info(f"Emio camera {camera.camera_serial} opened.")
         
