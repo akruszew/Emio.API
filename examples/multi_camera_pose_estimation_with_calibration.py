@@ -27,7 +27,7 @@ import emioapi._tracking as tracking
 import emioapi._camerafeedwindow as camerafeedwindow
 import tkinter as tk
 
-parameter = {'hue_h': 91, 'hue_l': 62, 'sat_h': 255, 'sat_l': 113, 'value_h': 255, 'value_l': 44, 'erosion_size': 0, 'area': 2}
+parameter = {'hue_h': 80, 'hue_l': 62, 'sat_h': 255, 'sat_l': 113, 'value_h': 255, 'value_l': 44, 'erosion_size': 0, 'area': 2}
 
 def DetectArucoCorners(frame:np.ndarray):
     
@@ -251,6 +251,8 @@ def run_tracking_system(cameras,tracker):
         cv2.createButton(mode.value, lambda *args, m=mode: set_visu_mode(m), None, cv2.QT_PUSH_BUTTON, 1)
     cv2.createButton("Exit", lambda *args: sys.exit(0), None, cv2.QT_PUSH_BUTTON, 1)
     
+    for p in parameter.keys():
+        cv2.createTrackbar(p, "Tracks", parameter[p], 255, lambda value, param=p: parameter.update({param: value}))
 
     while cameras[0].is_running:  # Assuming all cameras have the same running state
         try:
@@ -290,7 +292,7 @@ def run_tracking_system(cameras,tracker):
             elif visu_mode is VisualizerMode.TRACKS:
                 images = visualize_tracks(cameras, tracks, Ks, Rs, Ts)
             else:
-                images = [camera._camera.frame for camera in cameras]
+                images = [cv2.resize(camera._camera.contour_frame, (0, 0), fx=0.5, fy=0.5) for camera in cameras]
 
             concatenated_image = None
             for image in images:
@@ -301,7 +303,8 @@ def run_tracking_system(cameras,tracker):
                         concatenated_image = np.hstack((concatenated_image, image))
             if concatenated_image is not None:
                 cv2.imshow("Tracks", concatenated_image)
-
+            for camera in cameras:
+                camera._camera.parameter = parameter
             cv2.waitKey(1)  # Needed to update OpenCV windows, adjust delay as needed
             
         except KeyboardInterrupt:

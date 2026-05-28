@@ -381,7 +381,7 @@ class DepthCamera:
                                 cv.putText(frame, f"{i} ({worldx:.2f}, {worldy:.2f}, {worldz:.2f})", (x, y + 15), cv.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
 
                             
-                                cv.drawContours(self.frame, [contours[i]], -1, (255, 255, 0), 3)
+                        cv.drawContours(self.frame, [contours[i]], -1, (255, 255, 0), 3)
 
         if self.compute_point_cloud:
             points = self.pc.calculate(depth_rsframe)
