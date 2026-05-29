@@ -19,6 +19,11 @@ logger.setLevel(logging.WARNING) # set the logging level to WARNING to reduce th
 This example demonstrates how to use the EMIO API to control DYNAMIXEL motors in PWM mode.
 '''
 
+
+MAX_VOLTAGE = 12.0
+
+
+
 def main(emio: EmioMotors, u1 = 200, u2 = 400, loops=500, motor_id=0):
     '''
         Main function to run the PWM test.
@@ -131,7 +136,17 @@ def raw_velocity_to_rpm(raw_velocity):
     '''
     return raw_velocity * 0.229
 
-  
+def voltage_float(x):
+    
+    try:
+        x = float(x)
+    except ValueError:
+        raise argparse.ArgumentTypeError("%r not a floating-point literal" % (x,))
+
+    if x <= -MAX_VOLTAGE or x >= MAX_VOLTAGE:
+        raise argparse.ArgumentTypeError("%r not in range [-%r, %r]"%(x, MAX_VOLTAGE, MAX_VOLTAGE))
+    return x
+
 
 if __name__ == "__main__":
     
@@ -139,8 +154,8 @@ if __name__ == "__main__":
     # retreive command line arguments for PWM values and loops
 
     parser = argparse.ArgumentParser(description="Control DYNAMIXEL motors in PWM mode.")
-    parser.add_argument("Voltage_1", type=float, help="First voltage value to set.")
-    parser.add_argument("Voltage_2", type=float, help="Second voltage value to set.")
+    parser.add_argument("Voltage_1", type=voltage_float, help="First voltage value to set. Range: [-%r, %r]" % (MAX_VOLTAGE, MAX_VOLTAGE), default=2)
+    parser.add_argument("Voltage_2", type=voltage_float, help="Second voltage value to set. Range: [-%r, %r]" % (MAX_VOLTAGE, MAX_VOLTAGE), default=6)
     parser.add_argument("--samples", type=int, help="Number of samples to acquire.", default=500)
     
 

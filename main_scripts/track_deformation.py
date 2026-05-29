@@ -16,6 +16,7 @@ import numpy as np
 import argparse
 
 SAVE_FILE = "camera_1D_motion_data.csv"
+MAX_ANGLE = 90.0
 
 logger.setLevel(logging.WARNING) # set the logging level to WARNING to reduce the amount of logs printed to the console. Change to INFO or DEBUG for more detailed logs.
 
@@ -63,16 +64,23 @@ def main(camera: EmioCamera, emioMotors: EmioMotors, angles_deg: list):
             motor_angle = -angle*np.pi/180
             emioMotors.angles = [motor_angle, -motor_angle] * 2
             print("-"*20)
-            print(f"Set motor angle to {angle} degrees. Waiting for the trackers to stabilize...")
+            print(f"Set motor angle to {angle} degrees...")
+
+            while np.abs(emioMotors.angles[0] - motor_angle)>0.01: # wait until the trackers have stabilized
+                update_camera(camera) # update the camera frame and trackers
+                time.sleep(0.1) # wait for the motor to start moving
+
+            print(f"Motor stabilized at angle {angle} degrees. Waiting for the trackers to stabilize...")
             frame_without_moving = 0
             while frame_without_moving < 20: # wait until the trackers have stabilized
                 update_camera(camera) # update the camera frame and trackers
                 new_pos = np.asarray(camera._trackers_pos_camera_image)
                 delta = np.linalg.norm(new_pos - pos)
+                logger.info(f"Trackers delta: {np.abs(emioMotors.angles[0] - motor_angle)}")
                 if delta < 1: # if the trackers have stabilized
                     frame_without_moving += 1
-                else:
-                    time.sleep(0.1) # wait for the motor to start moving
+                
+                time.sleep(0.1) # wait for the motor to start moving
                 pos = new_pos
                 
             
@@ -136,9 +144,22 @@ def main(camera: EmioCamera, emioMotors: EmioMotors, angles_deg: list):
     print("Plotting completed. Close the plot window to finish.")
     plt.show()
 
+
+def angle_float(x):
+    
+    try:
+        x = float(x)
+        logger.info(f"Received angle value: {x} degrees")
+    except ValueError:
+        raise argparse.ArgumentTypeError("%r not a floating-point literal" % (x,))
+
+    if x < -MAX_ANGLE or x > MAX_ANGLE:
+        raise argparse.ArgumentTypeError("%r not in range [-%r, %r]" % (x, MAX_ANGLE, MAX_ANGLE))
+    return x
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--angles", nargs="+", type=float, default=[0,5,10,15,20], help="List of angles to test")
+    parser.add_argument("--angles", nargs="+", type=angle_float, default=[0,5,10,15,20], help="List of angles to test in degrees. Default is [0,5,10,15,20]. Range is [-%r, %r] degrees." % (MAX_ANGLE, MAX_ANGLE))
     parser.add_argument("--show", action="store_true", help="Whether to show the camera image during the test") 
     args = parser.parse_args()
     angles_deg = args.angles

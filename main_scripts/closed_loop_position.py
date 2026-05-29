@@ -20,11 +20,16 @@ RAW_PER_PUSLE_TO_VOLT_PER_RAD = (12/885)/(2*3.14/4096)
 VOLT_PER_RAD_TO_RAW_PER_PULSE = 1/RAW_PER_PUSLE_TO_VOLT_PER_RAD
 DT = 2/1000 # control loop time step in seconds (2 ms)
 
-
+MAX_GAIN_TABLE = 16383
+MAX_KP = np.round(MAX_GAIN_TABLE/(128*VOLT_PER_RAD_TO_RAW_PER_PULSE),decimals=2)
+MAX_KI = np.round(MAX_GAIN_TABLE/(65536*VOLT_PER_RAD_TO_RAW_PER_PULSE*DT),decimals=2)
+MAX_KD = np.round(MAX_GAIN_TABLE/(16*VOLT_PER_RAD_TO_RAW_PER_PULSE/DT),decimals=2)
 
 
 def Kp_to_Kptable(Kp):
     return Kp*128*VOLT_PER_RAD_TO_RAW_PER_PULSE
+
+
 
 def Ki_to_Kitable(Ki):
     return Ki*65536*VOLT_PER_RAD_TO_RAW_PER_PULSE*DT
@@ -149,14 +154,60 @@ def main(Kp_user:float=0, Ki_user:float=0, Kd_user:float=0,duration:float=0.3, r
 
     plt.show()
 
+def Kp_float(x):
+    try:
+        x = float(x)
+        logger.info(f"Received Kp value: {x}  = {Kp_to_Kptable(x)} in table value")
+    except ValueError:
+        raise argparse.ArgumentTypeError("%r not a floating-point literal" % (x,))
+
+    if x <= -MAX_KP or x >= MAX_KP:
+        raise argparse.ArgumentTypeError("%r not in range [-%r, %r]"%(x, MAX_KP, MAX_KP))
+    return x
+
+def Ki_float(x):
+    try:
+        x = float(x)
+        logger.info(f"Received Ki value: {x}  = {Ki_to_Kitable(x)} in table value")
+    except ValueError:
+        raise argparse.ArgumentTypeError("%r not a floating-point literal" % (x,))
+
+    if x <= -MAX_KI or x >= MAX_KI:
+        raise argparse.ArgumentTypeError("%r not in range [-%r, %r]"%(x, MAX_KI, MAX_KI))
+    return x
+
+def Kd_float(x):
+    try:
+        x = float(x)
+        logger.info(f"Received Kd value: {x}  = {Kd_to_Kdtable(x)} in table value")
+    except ValueError:
+        raise argparse.ArgumentTypeError("%r not a floating-point literal" % (x,))
+
+    if x <= -MAX_KD or x >= MAX_KD:
+        raise argparse.ArgumentTypeError("%r not in range [-%r, %r]"%(x, MAX_KD, MAX_KD))
+    return x
+
+def Ki_float(x):
+    try:        
+        x = float(x)
+        logger.info(f"Received Ki value: {x}  = {Ki_to_Kitable(x)} in table value")
+    except ValueError:
+        raise argparse.ArgumentTypeError("%r not a floating-point literal" % (x,))  
+
+
+    if x <= -MAX_KI or x >= MAX_KI:
+        raise argparse.ArgumentTypeError("%r not in range [-%r, %r]"%(x, MAX_KI, MAX_KI))
+    return x
+
+
 
 
 if __name__ == "__main__":
     # retrieve command line arguments for PID gains, duration, and reference position
     parser = argparse.ArgumentParser(description="Control DYNAMIXEL motors in position mode with PID control.")
-    parser.add_argument("Kp", type=float, help="Proportional gain for PID control.", default=1.0)
-    parser.add_argument("Ki", type=float, help="Integral gain for PID control.", default=0)
-    parser.add_argument("Kd", type=float, help="Derivative gain for PID control.", default=0)
+    parser.add_argument("Kp", type=Kp_float, help="Proportional gain for PID control. Range: [-%r, %r]" % (MAX_KP, MAX_KP), default=1.0)
+    parser.add_argument("Ki", type=Ki_float, help="Integral gain for PID control. Range: [-%r, %r]" % (MAX_KI, MAX_KI), default=0)
+    parser.add_argument("Kd", type=Kd_float, help="Derivative gain for PID control. Range: [-%r, %r]" % (MAX_KD, MAX_KD)    , default=0)
     parser.add_argument("--duration", type=float, help="Duration of the second PID test in seconds.", default=0.3)
     parser.add_argument("--reference", type=float, help="Reference position in radians.", default=0.1)
    
