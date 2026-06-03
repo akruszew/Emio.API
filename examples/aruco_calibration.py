@@ -103,7 +103,7 @@ def main():
                     x = (marker_center[0] - intrinsics.ppx) * depth / intrinsics.fx
                     y = (marker_center[1] - intrinsics.ppy) * depth / intrinsics.fy
                     z = depth
-                    print(f"Marker {ids[i][0]}: depth={depth:.3f}, x={x:.3f}, y={y:.3f}, z={z:.3f}")
+                    #print(f"Marker {ids[i][0]}: depth={depth:.3f}, x={x:.3f}, y={y:.3f}, z={z:.3f}")
 
                     if success:
                         # Draw axis

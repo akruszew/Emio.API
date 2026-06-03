@@ -29,6 +29,35 @@ import tkinter as tk
 
 parameter = {'hue_h': 80, 'hue_l': 62, 'sat_h': 255, 'sat_l': 113, 'value_h': 255, 'value_l': 44, 'erosion_size': 0, 'area': 2}
 
+
+def create_marker_center_and_rotation_dictionaries():
+    marker_centers = {
+        672: np.array([0, 0, 0]),  # Marker ID 672 at the origin
+        42:  np.array([84, 0, 0]),  # Marker ID 42 at (84mm, 0, 0)
+        909: np.array([0, 0, 0]),  
+        0: np.array([-90, 90, 0]),  
+        1: np.array([90, 90, 0]),  
+        2: np.array([-90, -90, 0]),
+        3: np.array([90, -90, 0]), 
+        # Add more markers here if needed
+    }
+    from scipy.spatial.transform import Rotation as R
+    R_xy_plane = np.eye(3)
+    marker_rotation = { 
+        672: R_xy_plane,
+        42:  R.from_euler('z', 90, degrees=True).as_matrix() @ R_xy_plane,  # Rotate marker 42 by 90 degrees around Z-axis
+        909: R_xy_plane,  # No rotation for marker 909
+        0: R_xy_plane,
+        1: R_xy_plane,
+        2: R_xy_plane,
+        3: R_xy_plane,
+    }
+    return marker_centers, marker_rotation
+
+
+
+
+
 def DetectArucoCorners(frame:np.ndarray):
     
     return frame
@@ -130,21 +159,7 @@ def estimate_transform(camera: EmioCamera, marker_corner_position_dic: dict[int,
     return max_error, color_frame.copy(), thresh_image.copy()
 
 
-def create_marker_center_and_rotation_dictionaries():
-    marker_centers = {
-        672: np.array([0, 0, 0]),  # Marker ID 672 at the origin
-        42:  np.array([84, 0, 0]),  # Marker ID 42 at (84mm, 0, 0)
-        909: np.array([0, 0, 0]),  # Marker ID 909 at (0, 84mm, 0)
-        # Add more markers here if needed
-    }
-    from scipy.spatial.transform import Rotation as R
-    R_xy_plane = np.eye(3)
-    marker_rotation = { 
-        672: R_xy_plane,
-        42:  R.from_euler('z', 90, degrees=True).as_matrix() @ R_xy_plane,  # Rotate marker 42 by 90 degrees around Z-axis
-        909: R_xy_plane,  # No rotation for marker 909
-    }
-    return marker_centers, marker_rotation
+
 
 
 def camera_update_loop(camera: EmioCamera, synchronization_barrier: threading.Barrier):
@@ -172,7 +187,11 @@ def main(cameras: list[EmioCamera]):
     MAX_ERROR_THRESHOLD = 5.0  # Maximum acceptable reprojection error in pixels for calibration
     start_time = time.time()
 
-    error = calibrate_cameras(cameras) # Calibrate cameras and get the maximum reprojection error across all cameras, will update the camera transforms
+    marker_size = 90
+    marker_position_dic, marker_rotation_dic = create_marker_center_and_rotation_dictionaries()
+    arcuco_corner_3D_position_dictionnay = create_aruco_corners_3D_positions_dictionaty(marker_position_dic,marker_rotation_dic,marker_size)
+
+    error = calibrate_cameras(cameras, arcuco_corner_3D_position_dictionnay) # Calibrate cameras and get the maximum reprojection error across all cameras, will update the camera transforms
     if error > MAX_ERROR_THRESHOLD:
         logger.warning(f"Calibration error {error:.2f} exceeds threshold of {MAX_ERROR_THRESHOLD}. Pose estimation may be inaccurate.")
         input("Press Enter to continue anyway, or Ctrl-C to exit.")
@@ -183,8 +202,8 @@ def main(cameras: list[EmioCamera]):
 
 
     tracker = tracking.MultiMarkerTracker3D(
-        dist_gate=150,    # Tune according to max speed and dt=1/30
-        max_misses=5,      # Tolerates ~5 frames of occlusion
+        dist_gate=150,    # Tune according to max speed and dt
+        max_misses=5,      # Tolerates x frames of occlusion
         q=1e-0,
         r=1e-6
     )
@@ -316,7 +335,7 @@ def run_tracking_system(cameras,tracker):
 
     frame_synchronization_barrier.abort()
 
-def calibrate_cameras(cameras):
+def calibrate_cameras(cameras,arcuco_corner_3D_position_dictionnay):
     '''
     Calibrate the cameras.  
     This function displays a calibration window with trackbars to adjust gamma and threshold for each camera. 
@@ -350,10 +369,7 @@ def calibrate_cameras(cameras):
                        "\nAdjust the gamma and threshold for each camera until the corners are correctly detected and the reprojection error is low."
                         "\nThen click 'Validate Calibration' or close the window to proceed.", 5000)
     
-    marker_size = 195
-    marker_position_dic, marker_rotation_dic = create_marker_center_and_rotation_dictionaries()
-    arcuco_corner_3D_position_dictionnay = create_aruco_corners_3D_positions_dictionaty(marker_position_dic,marker_rotation_dic,marker_size)
-    
+    max_of_all_errors = np.inf
     while not validated:  # Wait for calibration to complete (or timeout)
         max_of_all_errors = 0.0
         calibration_images = np.empty((cameras[0]._camera.height*2,0 ,3), dtype=np.uint8)  # Initialize an empty array to hold the calibration images
