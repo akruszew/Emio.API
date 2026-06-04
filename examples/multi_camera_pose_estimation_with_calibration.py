@@ -27,6 +27,8 @@ import emioapi._tracking as tracking
 import emioapi._camerafeedwindow as camerafeedwindow
 import tkinter as tk
 
+logger.setLevel(logging.WARNING)  # Set to INFO or DEBUG for more verbose output during development
+
 parameter = {'hue_h': 80, 'hue_l': 62, 'sat_h': 255, 'sat_l': 113, 'value_h': 255, 'value_l': 44, 'erosion_size': 0, 'area': 2}
 
 
@@ -173,7 +175,10 @@ def camera_update_loop(camera: EmioCamera, synchronization_barrier: threading.Ba
     """
     while camera.is_running:
         camera.update()  # update the camera frame and trackers
-        synchronization_barrier.wait() # Wait for all threads to reach this point before proceeding
+        try:
+            synchronization_barrier.wait() # Wait for all threads to reach this point before proceeding
+        except threading.BrokenBarrierError:
+            break  # Exit the loop if the barrier is broken (e.g., on shutdown)
 
 
 def main(cameras: list[EmioCamera]):
@@ -266,9 +271,9 @@ def run_tracking_system(cameras,tracker):
         visu_mode = mode
         logger.info(f"Visualizer mode set to {visu_mode.value}")
 
-    for mode in [VisualizerMode.MATCHES, VisualizerMode.TRACKS, VisualizerMode.RAW]:
-        cv2.createButton(mode.value, lambda *args, m=mode: set_visu_mode(m), None, cv2.QT_PUSH_BUTTON, 1)
-    cv2.createButton("Exit", lambda *args: sys.exit(0), None, cv2.QT_PUSH_BUTTON, 1)
+    # Replace Qt buttons (not available in some OpenCV builds) with keyboard controls.
+    # Controls: 'm' = MATCHES, 't' = TRACKS, 'r' = RAW, 'q' or ESC = Exit
+    print("Visualizer controls: 'm'=matches, 't'=tracks, 'r'=raw, 'q'/Esc=exit")
     
     for p in parameter.keys():
         cv2.createTrackbar(p, "Tracks", parameter[p], 255, lambda value, param=p: parameter.update({param: value}))
@@ -311,7 +316,7 @@ def run_tracking_system(cameras,tracker):
             elif visu_mode is VisualizerMode.TRACKS:
                 images = visualize_tracks(cameras, tracks, Ks, Rs, Ts)
             else:
-                images = [cv2.resize(camera._camera.contour_frame, (0, 0), fx=0.5, fy=0.5) for camera in cameras]
+                images = [cv2.resize(camera._camera.frame, (0, 0), fx=0.5, fy=0.5) for camera in cameras]
 
             concatenated_image = None
             for image in images:
@@ -324,7 +329,18 @@ def run_tracking_system(cameras,tracker):
                 cv2.imshow("Tracks", concatenated_image)
             for camera in cameras:
                 camera._camera.parameter = parameter
-            cv2.waitKey(1)  # Needed to update OpenCV windows, adjust delay as needed
+            # Handle keyboard controls in lieu of Qt buttons
+            key = cv2.waitKey(1) & 0xFF
+            if key != 255:
+                if key == ord('m'):
+                    set_visu_mode(VisualizerMode.MATCHES)
+                elif key == ord('t'):
+                    set_visu_mode(VisualizerMode.TRACKS)
+                elif key == ord('r'):
+                    set_visu_mode(VisualizerMode.RAW)
+                elif key == ord('q') or key == 27:
+                    logger.info("Exit key pressed. Exiting tracking loop.")
+                    break
             
         except KeyboardInterrupt:
             logger.info("Keyboard interrupt received.")
@@ -364,10 +380,8 @@ def calibrate_cameras(cameras,arcuco_corner_3D_position_dictionnay):
     def on_validate_calibration(*args):
         nonlocal validated
         validated = True
-    cv2.createButton("Validate Calibration", on_validate_calibration, None, cv2.QT_PUSH_BUTTON, 1)
-    cv2.displayOverlay("Camera calibration", "CTRL-P to display the control pannel"
-                       "\nAdjust the gamma and threshold for each camera until the corners are correctly detected and the reprojection error is low."
-                        "\nThen click 'Validate Calibration' or close the window to proceed.", 5000)
+    # Qt buttons/overlays may not be available in this OpenCV build. Use keyboard control instead.
+    print("Calibration: adjust gamma/threshold via trackbars; press 'v' to validate or close the window to proceed.")
     
     max_of_all_errors = np.inf
     while not validated:  # Wait for calibration to complete (or timeout)
@@ -387,14 +401,20 @@ def calibrate_cameras(cameras,arcuco_corner_3D_position_dictionnay):
                 calibration_images = np.hstack((calibration_images, image))
             
         calibration_images = cv2.resize(calibration_images, (0, 0), fx=0.5, fy=0.5)
-        
-        
-        if cv2.getWindowProperty("Camera calibration", cv2.WND_PROP_VISIBLE) <1:  # Check if the window has been closed
+
+        if cv2.getWindowProperty("Camera calibration", cv2.WND_PROP_VISIBLE) < 1:  # Check if the window has been closed
             logger.info("Calibration window closed by user. Exiting calibration.")
             validated = True
             break
         cv2.imshow(f"Camera calibration", calibration_images)
-        cv2.waitKey(1)  # Needed to update OpenCV windows
+        # Use keyboard input to validate calibration ('v') or exit (Esc)
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('v'):
+            validated = True
+            break
+        if key == 27:
+            validated = True
+            break
        
     cv2.destroyWindow("Camera calibration")
     return max_of_all_errors
