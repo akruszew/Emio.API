@@ -59,7 +59,7 @@ def main(Kp_user:float=0, Ki_user:float=0, Kd_user:float=0,duration:float=0.3, r
     time.sleep(1)
 
     # set first set of gains
-    motors.position_p_gain = [800, 800, 800, 800]
+    motors.position_p_gain = [200, 200, 200, 200]
     motors.position_i_gain = [0, 0, 0, 0]
     motors.position_d_gain = [0, 0, 0, 0]
     print("Set default PID gains")
@@ -77,7 +77,7 @@ def main(Kp_user:float=0, Ki_user:float=0, Kd_user:float=0,duration:float=0.3, r
     motors.angles = target_angles
     times = [time.time()]
     t0 = time.time()
-    while time.time() - t0 < 0.3:
+    while time.time() - t0 < duration:
         measures.append(motors.angles)
         times.append(time.time())
     time.sleep(1)
